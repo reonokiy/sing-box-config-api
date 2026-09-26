@@ -1,11 +1,9 @@
 import { Hono } from 'hono'
-import { authorizedMachine, authorizedPublisher, bearer, machineToken } from './auth.ts'
 import { parseSpec } from './generate.ts'
 import { etag, getConfig, saveMachine, validSlug, type Platform, type Role } from './store.ts'
 
 export type Settings = {
   dataDir: string
-  publisherKey: string
 }
 
 class PayloadTooLarge extends Error {}
@@ -40,7 +38,7 @@ function target(role: string, id: string, platform: string): role is Role {
     (platform === 'linux' || platform === 'macos')
 }
 
-export function createApp(settings: Settings): Hono {
+function baseApp(): Hono {
   const app = new Hono()
   app.use('*', async (c, next) => {
     await next()
@@ -49,12 +47,15 @@ export function createApp(settings: Settings): Hono {
     c.header('Referrer-Policy', 'no-referrer')
   })
   app.get('/healthz', (c) => c.text('ok'))
-  app.get('/v1/config/:role/:id/:platform', async (c) => {
+  app.get('/sing-box/', (c) => c.json({ service: 'sing-box registry', register: 'PUT /sing-box/v1/machines/{id}', config: 'GET /sing-box/v1/config/{server|client}/{id}/{linux|macos}' }))
+  return app
+}
+
+export function createApp(settings: Settings): Hono {
+  const app = baseApp()
+  app.get('/sing-box/v1/config/:role/:id/:platform', async (c) => {
     const { role, id, platform } = c.req.param()
     if (!target(role, id, platform)) return c.notFound()
-    if (!authorizedMachine(bearer(c.req.header('Authorization')), settings.publisherKey, id)) {
-      return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer' })
-    }
     const data = await getConfig(settings.dataDir, role, id, platform as Platform)
     if (data === null) return c.notFound()
     const hash = etag(data)
@@ -62,12 +63,9 @@ export function createApp(settings: Settings): Hono {
     if (c.req.header('If-None-Match') === hash) return c.body(null, 304)
     return c.body(data.toString('utf8'), 200, { 'Content-Type': 'application/json; charset=utf-8' })
   })
-  app.put('/v1/machines/:id', async (c) => {
+  app.put('/sing-box/v1/machines/:id', async (c) => {
     const id = c.req.param('id')
     if (!validSlug(id)) return c.notFound()
-    if (!authorizedPublisher(bearer(c.req.header('Authorization')), settings.publisherKey)) {
-      return c.text('Unauthorized', 401, { 'WWW-Authenticate': 'Bearer' })
-    }
     if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
       return c.text('Expected application/json', 415)
     }
@@ -77,7 +75,7 @@ export function createApp(settings: Settings): Hono {
       const body = await readLimitedBody(c.req.raw.body)
       const spec = parseSpec(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
       await saveMachine(settings.dataDir, id, spec)
-      return c.json({ id, downloadToken: machineToken(settings.publisherKey, id) })
+      return c.json({ id, server: `/sing-box/v1/config/server/${id}/linux`, client: { linux: `/sing-box/v1/config/client/${id}/linux`, macos: `/sing-box/v1/config/client/${id}/macos` } })
     } catch (error) {
       if (error instanceof PayloadTooLarge) return c.text('Payload too large', 413)
       if (error instanceof SyntaxError || error instanceof TypeError ||

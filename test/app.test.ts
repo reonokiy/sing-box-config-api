@@ -5,9 +5,9 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import { createApp } from '../src/app.ts'
 
-const publisher = 'publisher-synthetic-token-for-tests'
 let directory: string
-let app: ReturnType<typeof createApp>
+let admin: ReturnType<typeof createApp>
+let read: ReturnType<typeof createApp>
 
 const spec = {
   server: 'edge.example.com',
@@ -19,14 +19,16 @@ const spec = {
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'sing-box-config-test-'))
-  app = createApp({ dataDir: directory, publisherKey: publisher })
+  const settings = { dataDir: directory }
+  admin = createApp(settings)
+  read = createApp(settings)
 })
 after(async () => { await rm(directory, { recursive: true, force: true }) })
 
 async function register(id: string, body = spec) {
-  return app.request(`/v1/machines/${id}`, {
+  return admin.request(`/sing-box/v1/machines/${id}`, {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${publisher}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
 }
@@ -34,20 +36,16 @@ async function register(id: string, body = spec) {
 test('generates matching server/client credentials for each machine', async () => {
   const first = await register('laptop')
   assert.equal(first.status, 200)
-  const { downloadToken: firstToken } = await first.json() as { downloadToken: string }
+  assert.equal((await first.json() as any).id, 'laptop')
   const second = await register('desktop')
   assert.equal(second.status, 200)
-  const { downloadToken: secondToken } = await second.json() as { downloadToken: string }
-  assert.notEqual(firstToken, secondToken)
 
-  const get = (role: string, id: string, platform: string, token: string) => app.request(
-    `/v1/config/${role}/${id}/${platform}`, { headers: { Authorization: `Bearer ${token}` } },
+  const get = (role: string, id: string, platform: string) => read.request(
+    `/sing-box/v1/config/${role}/${id}/${platform}`,
   )
-  assert.equal((await get('server', 'laptop', 'linux', secondToken)).status, 401)
-  assert.equal((await get('server', 'laptop', 'linux', publisher)).status, 401)
 
-  const serverResponse = await get('server', 'laptop', 'linux', firstToken)
-  const clientResponse = await get('client', 'laptop', 'macos', firstToken)
+  const serverResponse = await get('server', 'laptop', 'linux')
+  const clientResponse = await get('client', 'laptop', 'macos')
   assert.equal(serverResponse.status, 200)
   assert.equal(clientResponse.status, 200)
   assert.equal(clientResponse.headers.get('Cache-Control'), 'no-store')
@@ -62,22 +60,22 @@ test('generates matching server/client credentials for each machine', async () =
   assert.equal(client.endpoints, undefined)
 
   const repeated = await register('laptop')
-  assert.equal((await repeated.json() as any).downloadToken, firstToken)
-  const sameServer = await get('server', 'laptop', 'linux', firstToken)
+  assert.equal((await repeated.json() as any).id, 'laptop')
+  const sameServer = await get('server', 'laptop', 'linux')
   assert.equal(await sameServer.text(), JSON.stringify(server, null, 2) + '\n')
   const changed = await register('laptop', { ...spec, server: 'new-edge.example.com' })
   assert.equal(changed.status, 200)
-  const updated = await (await get('client', 'laptop', 'linux', firstToken)).json() as any
+  const updated = await (await get('client', 'laptop', 'linux')).json() as any
   assert.equal(updated.outbounds.find((outbound: any) => outbound.tag === 'AnyTLS').server, 'new-edge.example.com')
   assert.equal(updated.outbounds.find((outbound: any) => outbound.tag === 'AnyTLS').password, byTag('AnyTLS').password)
-  const desktopClient = await (await get('client', 'desktop', 'linux', secondToken)).json() as any
+  const desktopClient = await (await get('client', 'desktop', 'linux')).json() as any
   assert.notEqual(byTag('AnyTLS').password, desktopClient.outbounds.find((outbound: any) => outbound.tag === 'AnyTLS').password)
 })
 
 test('rejects invalid machine specs and IDs', async () => {
-  assert.equal((await app.request('/v1/machines/Bad-ID', {
+  assert.equal((await admin.request('/sing-box/v1/machines/Bad-ID', {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${publisher}`, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(spec),
   })).status, 404)
   assert.equal((await register('bad', { ...spec, certificatePath: '../secret' })).status, 400)
