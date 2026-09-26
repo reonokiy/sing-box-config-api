@@ -13,7 +13,10 @@ export function etag(data: Uint8Array): string {
 export class PostgresStore {
   private readonly sql: ReturnType<typeof postgres>
   constructor(url?: string) {
-    const options = { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {} }
+    const options = {
+      max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {},
+      ...(process.env.PGSSLMODE === 'require' ? { ssl: 'require' as const } : {}),
+    }
     this.sql = url ? postgres(url, options) : postgres(options)
   }
 
