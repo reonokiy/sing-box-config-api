@@ -1,3 +1,4 @@
+import { macosProfile, type MacosSettings } from './macos.ts'
 import { generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto'
 
 export type Platform = 'linux' | 'macos'
@@ -108,7 +109,7 @@ export function serverConfig(id: string, spec: MachineSpec, secrets: Credentials
   }
 }
 
-export function clientConfig(id: string, spec: MachineSpec, secrets: Credentials, platform: Platform): object {
+export function clientConfig(id: string, spec: MachineSpec, secrets: Credentials, platform: Platform, settings: MacosSettings = { headscaleDomains: [], headscalePublicDomains: [] }): object {
   const linux = platform === 'linux'
   const server = spec.server
   const tls = { enabled: true, server_name: spec.tlsServerName }
@@ -122,7 +123,7 @@ export function clientConfig(id: string, spec: MachineSpec, secrets: Credentials
     tun.auto_redirect = true
     tun.strict_route = true
   }
-  return {
+  const config = {
     log: { level: 'info', timestamp: true },
     dns: { servers: [{ type: 'local', tag: 'local' }], final: 'local' },
     inbounds: [tun],
@@ -169,4 +170,5 @@ export function clientConfig(id: string, spec: MachineSpec, secrets: Credentials
     },
     experimental: { cache_file: { enabled: true, cache_id: `${id}-${platform}`, store_dns: true } },
   }
+  return linux ? config : macosProfile(config, settings)
 }

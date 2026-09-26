@@ -77,7 +77,7 @@ test('generates matching server/client credentials for each machine', async () =
   assert.equal(server.inbounds[2].users[0].uuid, byTag('TUIC').uuid)
   assert.equal(server.inbounds[2].users[0].password, byTag('TUIC').password)
   assert.equal(server.inbounds[3].users[0].password, byTag('Hysteria2').password)
-  assert.equal(client.endpoints, undefined)
+  assert.equal(client.endpoints[0].tag, 'Tailscale')
 
   const repeated = await register('laptop')
   assert.equal((await repeated.json() as any).id, 'laptop')

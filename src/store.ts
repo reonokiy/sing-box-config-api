@@ -1,3 +1,4 @@
+import { type MacosSettings } from './macos.ts'
 import { createHash } from 'node:crypto'
 import postgres from 'postgres'
 import { clientConfig, newCredentials, serverConfig, type Credentials, type MachineSpec, type Platform, type Role } from './generate.ts'
@@ -12,7 +13,9 @@ export function etag(data: Uint8Array): string {
 
 export class PostgresStore {
   private readonly sql: ReturnType<typeof postgres>
-  constructor(url?: string) {
+  private readonly macos?: MacosSettings
+  constructor(url?: string, macos?: MacosSettings) {
+    this.macos = macos
     const options = {
       max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {},
       ...(process.env.PGSSLMODE === 'require' ? { ssl: 'require' as const } : {}),
@@ -87,7 +90,7 @@ export class PostgresStore {
       hysteria2Password: row.hysteria2_password, realityPrivateKey: row.reality_private_key,
       realityPublicKey: row.reality_public_key, realityShortID: row.reality_short_id,
     }
-    const config = role === 'server' ? serverConfig(id, spec, c) : clientConfig(id, spec, c, platform)
+    const config = role === 'server' ? serverConfig(id, spec, c) : clientConfig(id, spec, c, platform, this.macos)
     return Buffer.from(`${JSON.stringify(config, null, 2)}\n`)
   }
 }

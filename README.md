@@ -51,11 +51,63 @@ The existing reference deployment uses Cloudflare DNS-01; this standalone config
 uses HTTP-01 so machines do not need a DNS API token. The API only generates
 configuration; it does not install sing-box or configure DNS and firewalls.
 
-Clients use TUN with a protocol selector. Linux uses the system stack and
-`auto_redirect`; macOS uses the mixed stack. Tailnet/private destinations go
-directly through the host network. Machines join Headscale using the ordinary
-Tailscale client; these configurations have no embedded Tailscale endpoint.
-The generated configs pass `sing-box check` on v1.14.0-beta.1.
+Clients use TUN: Linux uses the system stack with `auto_redirect` and a host-managed
+Tailscale client. macOS uses the mixed stack and embedded Tailscale endpoints.
+The generated configs target sing-box v1.14.0-beta.1 with `with_tailscale`,
+`with_gvisor`, `with_quic`, and `with_utls` support.
+
+## macOS networks and routing
+
+macOS has an official `Tailscale` endpoint. Set these registry environment variables
+to add a second `Headscale` endpoint (example deployment values only):
+
+```sh
+HEADSCALE_URL=https://hs.example.com
+HEADSCALE_DOMAINS=tailnet
+HEADSCALE_PUBLIC_DOMAINS=internal.example.com
+```
+
+`HEADSCALE_DOMAINS` contains comma-separated MagicDNS suffixes or exact record names.
+`HEADSCALE_PUBLIC_DOMAINS` contains ordinary public DNS names that resolve to
+Headscale IPs. MagicDNS rules take priority over public DNS rules.
+The real deployment URL is supplied at runtime and is not embedded in source.
+
+- Login to each endpoint separately in the client's endpoint management UI.
+  No auth keys are embedded. State is stored in separate `tailscale-official` and
+  `tailscale-headscale` directories relative to the client's data directory.
+- The `Tailnet` selector switches raw `100.64.0.0/10`, Tailscale IPv6, and advertised
+  subnet traffic. It defaults to Headscale when configured. Both endpoints remain
+  online; switching interrupts existing selected-network connections.
+- Fully qualified `.ts.net` and configured Headscale names always use their owning
+  endpoint, independent of the selector. Internal A/AAAA queries use FakeIP to
+  preserve the domain when real addresses overlap; the route then resolves the
+  actual address with that network's DNS. The persistent cache stores FakeIP mappings.
+- Ambiguous single-label names return NXDOMAIN; use complete names. Unknown
+  private subnets use DIRECT unless advertised by an endpoint.
+- Apple/China domains and IPs go DIRECT. Their DNS uses domestic DoH and suppresses
+  AAAA/HTTPS/SVCB as in the reference macOS profile. Other DNS goes through Proxy.
+- `AI` is independently selectable and defaults to Proxy. Configs contain one
+  registered machine's protocols, so there are no invented HK/US or WARP profiles.
+- Keep the client's data directory across restarts. Initial rule-set downloads need
+  the selected proxy server to be reachable. Do not run another competing TUN client.
+
+## Docker verification
+
+The test Compose stack binds only loopback ports and uses disposable synthetic
+PostgreSQL credentials/data. From the repository directory:
+
+```sh
+docker compose -p registry-test -f compose.test.yaml up -d --build --wait
+node test/docker-smoke.mjs
+docker compose -p registry-test -f compose.test.yaml down
+```
+
+The smoke test registers a synthetic server, downloads all three configs, checks
+ETags and restart persistence, and runs `sing-box check`. Runtime testing replaces
+the macOS TUN with a mixed inbound, remote rule downloads with synthetic inline
+rules, and control URLs with an offline address. It verifies both endpoints and
+selector switching without real logins. macOS TUN behavior, real MagicDNS and
+peer reachability still require testing on a Mac after both endpoint logins.
 
 ## Development and deployment
 

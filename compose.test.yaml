@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: registry
+      POSTGRES_DB: registry
+      POSTGRES_PASSWORD: registry-test-only
+    ports:
+      - '127.0.0.1:15487:5432'
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U registry -d registry']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  api:
+    build: .
+    environment:
+      HOST: 0.0.0.0
+      PGHOST: db
+      PGDATABASE: registry
+      PGUSER: registry
+      PGPASSWORD: registry-test-only
+      HEADSCALE_URL: https://hs.example.com
+      HEADSCALE_DOMAINS: tailnet
+      HEADSCALE_PUBLIC_DOMAINS: internal.example.com
+    ports:
+      - '127.0.0.1:13087:3000'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      db:
+        condition: service_healthy
+networks:
+  default: {}
