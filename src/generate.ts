@@ -7,8 +7,7 @@ export type MachineSpec = {
   server: string
   tlsServerName: string
   realityServerName: string
-  certificatePath: string
-  keyPath: string
+  acmeEmail?: string
 }
 
 export type Credentials = {
@@ -31,22 +30,16 @@ export function parseSpec(value: unknown): MachineSpec {
   if (typeof spec.server !== 'string' || !address.test(spec.server) || spec.server.includes('..') ||
       typeof spec.tlsServerName !== 'string' || !domain.test(spec.tlsServerName) ||
       typeof spec.realityServerName !== 'string' || !domain.test(spec.realityServerName) ||
-      typeof spec.certificatePath !== 'string' || !safePath(spec.certificatePath) ||
-      typeof spec.keyPath !== 'string' || !safePath(spec.keyPath)) {
+      (spec.acmeEmail !== undefined && (typeof spec.acmeEmail !== 'string' ||
+        spec.acmeEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(spec.acmeEmail)))) {
     throw new Error('invalid machine spec')
   }
   return {
     server: spec.server,
     tlsServerName: spec.tlsServerName,
     realityServerName: spec.realityServerName,
-    certificatePath: spec.certificatePath,
-    keyPath: spec.keyPath,
+    ...(spec.acmeEmail === undefined ? {} : { acmeEmail: spec.acmeEmail as string }),
   }
-}
-
-function safePath(path: string): boolean {
-  return path.length <= 255 && /^\/[A-Za-z0-9._/-]+$/.test(path) &&
-    !path.split('/').includes('..')
 }
 
 export function newCredentials(): Credentials {
@@ -68,11 +61,17 @@ export function newCredentials(): Credentials {
 export function serverConfig(id: string, spec: MachineSpec, secrets: Credentials): object {
   const tls = {
     enabled: true,
-    certificate_path: spec.certificatePath,
-    key_path: spec.keyPath,
+    certificate_provider: 'inbound-acme',
   }
   return {
     log: { level: 'info', timestamp: true },
+    certificate_providers: [{
+      type: 'acme', tag: 'inbound-acme', domain: [spec.tlsServerName],
+      provider: 'letsencrypt',
+      ...(spec.acmeEmail ? { email: spec.acmeEmail } : {}),
+      // TCP 443 belongs to AnyTLS; use HTTP-01 on TCP 80 for issuance.
+      disable_tls_alpn_challenge: true,
+    }],
     inbounds: [
       {
         type: 'anytls', tag: 'in:anytls', listen: '::', listen_port: 443,

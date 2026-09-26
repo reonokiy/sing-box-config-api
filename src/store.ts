@@ -29,8 +29,9 @@ export class PostgresStore {
           server text NOT NULL,
           tls_server_name text NOT NULL,
           reality_server_name text NOT NULL,
-          certificate_path text NOT NULL,
-          key_path text NOT NULL,
+          certificate_path text,
+          key_path text,
+          acme_email text NOT NULL DEFAULT '',
           anytls_password text NOT NULL,
           vless_uuid uuid NOT NULL UNIQUE,
           tuic_uuid uuid NOT NULL UNIQUE,
@@ -42,6 +43,10 @@ export class PostgresStore {
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz NOT NULL DEFAULT now()
         )`
+      // Retain legacy path metadata while allowing registrations without file paths.
+      await sql`ALTER TABLE machines ALTER COLUMN certificate_path DROP NOT NULL,
+        ALTER COLUMN key_path DROP NOT NULL,
+        ADD COLUMN IF NOT EXISTS acme_email text NOT NULL DEFAULT ''`
     })
   }
 
@@ -54,17 +59,17 @@ export class PostgresStore {
     // One atomic upsert: concurrent registration never replaces established credentials.
     await this.sql`
       INSERT INTO machines (
-        id, server, tls_server_name, reality_server_name, certificate_path, key_path,
+        id, server, tls_server_name, reality_server_name, acme_email,
         anytls_password, vless_uuid, tuic_uuid, tuic_password, hysteria2_password,
         reality_private_key, reality_public_key, reality_short_id
       ) VALUES (
-        ${id}, ${spec.server}, ${spec.tlsServerName}, ${spec.realityServerName}, ${spec.certificatePath}, ${spec.keyPath},
+        ${id}, ${spec.server}, ${spec.tlsServerName}, ${spec.realityServerName}, ${spec.acmeEmail ?? ''},
         ${c.anytlsPassword}, ${c.vlessUUID}, ${c.tuicUUID}, ${c.tuicPassword}, ${c.hysteria2Password},
         ${c.realityPrivateKey}, ${c.realityPublicKey}, ${c.realityShortID}
       ) ON CONFLICT (id) DO UPDATE SET
         server = EXCLUDED.server, tls_server_name = EXCLUDED.tls_server_name,
         reality_server_name = EXCLUDED.reality_server_name,
-        certificate_path = EXCLUDED.certificate_path, key_path = EXCLUDED.key_path,
+        acme_email = EXCLUDED.acme_email,
         updated_at = now()`
   }
 
@@ -74,7 +79,7 @@ export class PostgresStore {
     const spec: MachineSpec = {
       server: row.server, tlsServerName: row.tls_server_name,
       realityServerName: row.reality_server_name,
-      certificatePath: row.certificate_path, keyPath: row.key_path,
+      ...(row.acme_email ? { acmeEmail: row.acme_email } : {}),
     }
     const c: Credentials = {
       anytlsPassword: row.anytls_password, vlessUUID: row.vless_uuid,

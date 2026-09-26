@@ -37,11 +37,21 @@ returns the same configuration). Responses support ETag/If-None-Match and
 `Cache-Control: no-store`. Credentials are never written to application logs.
 
 Protocols follow `reonokiy/sing-box`: AnyTLS (TCP/443), VLESS Reality
-(TCP/8443), TUIC (UDP/443), and Hysteria2 (UDP/8443). The server needs a valid
-certificate for `tlsServerName` at the specified file paths, and the Reality
-handshake target must be reachable. These dedicated ports work without
-Traefik. This service only generates configuration; it does not install
-sing-box, obtain certificates, or configure DNS and firewalls.
+(TCP/8443), TUIC (UDP/443), and Hysteria2 (UDP/8443). AnyTLS, TUIC and Hysteria2 share a sing-box ACME certificate provider;
+VLESS uses Reality. No certificate files or file paths are required at registration.
+An optional `acmeEmail` sets the ACME account contact address.
+
+The server automatically obtains and renews a Let's Encrypt certificate for
+`tlsServerName` using HTTP-01. Its public A/AAAA records must point to the machine,
+and public TCP/80 must reach sing-box and be available for its challenge listener.
+TLS-ALPN challenges are disabled because AnyTLS uses TCP/443. Certificate/account
+state uses sing-box's default ACME data directory on the server machine; keep that
+directory across restarts. The registry itself still needs no persistent volume.
+Reality uses the configured handshake target and generated keys, without ACME.
+Use a sing-box build with `with_acme` (validated on v1.14.0-beta.1).
+The existing reference deployment uses Cloudflare DNS-01; this standalone config
+uses HTTP-01 so machines do not need a DNS API token. The API only generates
+configuration; it does not install sing-box or configure DNS and firewalls.
 
 Clients use TUN with a protocol selector. Linux uses the system stack and
 `auto_redirect`; macOS uses the mixed stack. Tailnet/private destinations go

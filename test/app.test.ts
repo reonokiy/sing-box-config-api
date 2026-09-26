@@ -37,7 +37,7 @@ after(async () => {
   if (control) { await control.unsafe('DROP DATABASE IF EXISTS ' + database); await control.end() }
 })
 
-async function register(id: string, body = spec) {
+async function register(id: string, body: typeof spec & { acmeEmail?: string } = spec) {
   return admin.request(`/v1/machines/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -62,6 +62,16 @@ test('generates matching server/client credentials for each machine', async () =
   assert.equal(clientResponse.status, 200)
   assert.equal(clientResponse.headers.get('Cache-Control'), 'no-store')
   const server = await serverResponse.json() as any
+  assert.deepEqual(server.certificate_providers, [{
+    type: 'acme', tag: 'inbound-acme', domain: [spec.tlsServerName],
+    provider: 'letsencrypt', disable_tls_alpn_challenge: true,
+  }])
+  for (const inbound of server.inbounds.filter((i: any) => i.type !== 'vless')) {
+    assert.equal(inbound.tls.certificate_provider, 'inbound-acme')
+    assert.equal(inbound.tls.certificate_path, undefined)
+    assert.equal(inbound.tls.key_path, undefined)
+  }
+  assert.equal(server.inbounds[1].tls.reality.enabled, true)
   const client = await clientResponse.json() as any
   const byTag = (tag: string) => client.outbounds.find((outbound: any) => outbound.tag === tag)
   assert.equal(server.inbounds[0].users[0].password, byTag('AnyTLS').password)
@@ -90,7 +100,7 @@ test('rejects invalid machine specs and IDs', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(spec),
   })).status, 404)
-  assert.equal((await register('bad', { ...spec, certificatePath: '../secret' })).status, 400)
+  assert.equal((await register('bad', { ...spec, acmeEmail: 'invalid-email' })).status, 400)
   assert.equal((await register('oversize', { ...spec, server: 'x'.repeat(17_000) })).status, 413)
 })
 
@@ -122,4 +132,24 @@ test('configuration links resolve under any gateway mount path', async () => {
       assert.equal((await read.request(upstreamPath)).status, 200)
     }
   }
+})
+
+
+test('migrates legacy path columns without changing machine credentials', async () => {
+  const url = new URL(process.env.TEST_DATABASE_URL!); url.pathname = '/' + database
+  const sql = postgres(url.toString())
+  try {
+    await register('migration')
+    const before = await store.getConfig('server', 'migration', 'linux')
+    await sql`UPDATE machines SET certificate_path = '/legacy/cert.pem', key_path = '/legacy/key.pem'`
+    await sql`ALTER TABLE machines ALTER COLUMN certificate_path SET NOT NULL,
+      ALTER COLUMN key_path SET NOT NULL, DROP COLUMN acme_email`
+    await store.initialize()
+    await store.initialize()
+    assert.equal((await register('migration')).status, 200)
+    assert.equal((await store.getConfig('server', 'migration', 'linux'))?.toString(), before?.toString())
+    assert.equal((await register('after-migration', { ...spec, acmeEmail: 'ops@example.com' })).status, 200)
+    const config = JSON.parse((await store.getConfig('server', 'after-migration', 'linux'))!.toString())
+    assert.equal(config.certificate_providers[0].email, 'ops@example.com')
+  } finally { await sql.end() }
 })
