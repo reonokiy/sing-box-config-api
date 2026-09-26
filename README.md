@@ -13,9 +13,7 @@ entrypoint without application authentication.
 {
   "server": "edge-a.example.com",
   "tlsServerName": "edge-a.example.com",
-  "realityServerName": "www.example.org",
-  "certificatePath": "/etc/fullchain.pem",
-  "keyPath": "/etc/privkey.pem"
+  "realityServerName": "www.example.org"
 }
 ```
 

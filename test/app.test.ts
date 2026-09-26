@@ -15,8 +15,6 @@ const spec = {
   server: 'edge.example.com',
   tlsServerName: 'edge.example.com',
   realityServerName: 'www.example.org',
-  certificatePath: '/etc/fullchain.pem',
-  keyPath: '/etc/privkey.pem',
 }
 
 before(async () => {
