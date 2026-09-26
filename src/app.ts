@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 import { parseSpec } from './generate.ts'
-import { etag, getConfig, saveMachine, validSlug, type Platform, type Role } from './store.ts'
+import { etag, validSlug, type PostgresStore, type Platform, type Role } from './store.ts'
 
 export type Settings = {
-  dataDir: string
+  store: PostgresStore
 }
 
 class PayloadTooLarge extends Error {}
@@ -53,10 +53,15 @@ function baseApp(): Hono {
 
 export function createApp(settings: Settings): Hono {
   const app = baseApp()
+  app.onError((_error, c) => c.text('Internal Server Error', 500))
+  app.get('/readyz', async (c) => {
+    try { await settings.store.ready(); return c.text('ok') }
+    catch { return c.text('Database unavailable', 503) }
+  })
   app.get('/sing-box/v1/config/:role/:id/:platform', async (c) => {
     const { role, id, platform } = c.req.param()
     if (!target(role, id, platform)) return c.notFound()
-    const data = await getConfig(settings.dataDir, role, id, platform as Platform)
+    const data = await settings.store.getConfig(role, id, platform as Platform)
     if (data === null) return c.notFound()
     const hash = etag(data)
     c.header('ETag', hash)
@@ -74,7 +79,7 @@ export function createApp(settings: Settings): Hono {
     try {
       const body = await readLimitedBody(c.req.raw.body)
       const spec = parseSpec(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
-      await saveMachine(settings.dataDir, id, spec)
+      await settings.store.saveMachine(id, spec)
       return c.json({ id, server: `/sing-box/v1/config/server/${id}/linux`, client: { linux: `/sing-box/v1/config/client/${id}/linux`, macos: `/sing-box/v1/config/client/${id}/macos` } })
     } catch (error) {
       if (error instanceof PayloadTooLarge) return c.text('Payload too large', 413)

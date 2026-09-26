@@ -21,8 +21,8 @@ entrypoint without application authentication.
 
 The response contains configuration download paths. Updating the same machine
 ID preserves its credentials; different IDs receive independent passwords,
-UUIDs, and Reality key pairs. Machine records are persisted atomically and must
-be backed up. There is no token management API.
+UUIDs, and Reality key pairs. Machine records use a dedicated PostgreSQL database. Each field has an
+explicit column; atomic upserts preserve credentials during concurrent updates. There is no token management API.
 
 ## Download configurations
 
@@ -53,11 +53,15 @@ Node.js 24:
 
 ```sh
 npm ci
-npm run check
-DATA_DIR=./data npm start
+TEST_DATABASE_URL=postgres://postgres@localhost/postgres npm run check
+npm start
 ```
 
-The default listener is `127.0.0.1:3000`. Kubernetes sets `HOST=0.0.0.0` and
-mounts an encrypted persistent volume at `DATA_DIR`. Run one replica. Image
-builds contain code only; no machine records or proxy credentials are committed
+Set standard `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and
+`PGSSLMODE` environment variables, or supply `DATABASE_URL` through a secret
+store. The service initializes its table under a transaction advisory lock.
+The default listener is `127.0.0.1:3000`; Kubernetes sets `HOST=0.0.0.0`.
+The application needs no persistent volume. PostgreSQL supplies durable storage
+and backup. `/healthz` checks the process; `/readyz` checks database access.
+Images contain code only; no machine records or proxy credentials are committed
 or bundled into the image.

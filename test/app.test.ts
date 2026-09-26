@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import postgres from 'postgres'
+import { PostgresStore } from '../src/store.ts'
 import { after, before, test } from 'node:test'
 import { createApp } from '../src/app.ts'
 
-let directory: string
+let store: PostgresStore
+let database: string
+let control: ReturnType<typeof postgres>
 let admin: ReturnType<typeof createApp>
 let read: ReturnType<typeof createApp>
 
@@ -18,12 +20,22 @@ const spec = {
 }
 
 before(async () => {
-  directory = await mkdtemp(join(tmpdir(), 'sing-box-config-test-'))
-  const settings = { dataDir: directory }
+  const url = process.env.TEST_DATABASE_URL
+  if (!url) throw new Error('TEST_DATABASE_URL is required for PostgreSQL integration tests')
+  control = postgres(url)
+  database = 'registry_test_' + randomUUID().replaceAll('-', '')
+  await control.unsafe('CREATE DATABASE ' + database)
+  const testUrl = new URL(url); testUrl.pathname = '/' + database
+  store = new PostgresStore(testUrl.toString())
+  await store.initialize()
+  const settings = { store }
   admin = createApp(settings)
   read = createApp(settings)
 })
-after(async () => { await rm(directory, { recursive: true, force: true }) })
+after(async () => {
+  if (store) await store.close()
+  if (control) { await control.unsafe('DROP DATABASE IF EXISTS ' + database); await control.end() }
+})
 
 async function register(id: string, body = spec) {
   return admin.request(`/sing-box/v1/machines/${id}`, {
@@ -80,4 +92,15 @@ test('rejects invalid machine specs and IDs', async () => {
   })).status, 404)
   assert.equal((await register('bad', { ...spec, certificatePath: '../secret' })).status, 400)
   assert.equal((await register('oversize', { ...spec, server: 'x'.repeat(17_000) })).status, 413)
+})
+
+test('concurrent registration preserves credentials and database reconnect keeps records', async () => {
+  await register('concurrent')
+  const before = await store.getConfig('server', 'concurrent', 'linux')
+  await Promise.all(Array.from({ length: 8 }, () => register('concurrent')))
+  assert.equal((await store.getConfig('server', 'concurrent', 'linux'))?.toString(), before?.toString())
+  const url = new URL(process.env.TEST_DATABASE_URL!); url.pathname = '/' + database
+  const reconnected = new PostgresStore(url.toString())
+  try { assert.equal((await reconnected.getConfig('server', 'concurrent', 'linux'))?.toString(), before?.toString()) }
+  finally { await reconnected.close() }
 })

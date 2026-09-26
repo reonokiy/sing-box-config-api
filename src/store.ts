@@ -1,62 +1,85 @@
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import postgres from 'postgres'
 import { clientConfig, newCredentials, serverConfig, type Credentials, type MachineSpec, type Platform, type Role } from './generate.ts'
 
 export { type Platform, type Role }
-
-type MachineRecord = { spec: MachineSpec; credentials: Credentials }
-let registrationQueue = Promise.resolve()
-
 export function validSlug(value: string): boolean {
   return /^[a-z0-9][a-z0-9-]{0,62}$/.test(value)
 }
-
-function recordPath(root: string, id: string): string {
-  if (!validSlug(id)) throw new Error('invalid id')
-  return join(root, `${id}.json`)
-}
-
 export function etag(data: Uint8Array): string {
   return `"${createHash('sha256').update(data).digest('hex')}"`
 }
 
-async function readRecord(root: string, id: string): Promise<MachineRecord | null> {
-  try {
-    return JSON.parse(await readFile(recordPath(root, id), 'utf8')) as MachineRecord
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
+export class PostgresStore {
+  private readonly sql: ReturnType<typeof postgres>
+  constructor(url?: string) {
+    const options = { max: 5, connect_timeout: 5, idle_timeout: 20, onnotice: () => {} }
+    this.sql = url ? postgres(url, options) : postgres(options)
   }
-}
 
-async function saveMachineUnlocked(root: string, id: string, spec: MachineSpec): Promise<void> {
-  const existing = await readRecord(root, id)
-  if (existing !== null && JSON.stringify(existing.spec) === JSON.stringify(spec)) return
-  const record: MachineRecord = { spec, credentials: existing?.credentials ?? newCredentials() }
-  await mkdir(root, { recursive: true, mode: 0o700 })
-  const destination = recordPath(root, id)
-  const temporary = join(root, `.${id}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(temporary, `${JSON.stringify(record)}\n`, { flag: 'wx', mode: 0o600 })
-    await rename(temporary, destination)
-  } catch (error) {
-    await unlink(temporary).catch(() => undefined)
-    throw error
+  async initialize(): Promise<void> {
+    await this.sql.begin(async (sql) => {
+      await sql`SELECT pg_advisory_xact_lock(736426, 1)`
+      await sql`
+        CREATE TABLE IF NOT EXISTS machines (
+          id text PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+          server text NOT NULL,
+          tls_server_name text NOT NULL,
+          reality_server_name text NOT NULL,
+          certificate_path text NOT NULL,
+          key_path text NOT NULL,
+          anytls_password text NOT NULL,
+          vless_uuid uuid NOT NULL UNIQUE,
+          tuic_uuid uuid NOT NULL UNIQUE,
+          tuic_password text NOT NULL,
+          hysteria2_password text NOT NULL,
+          reality_private_key text NOT NULL,
+          reality_public_key text NOT NULL,
+          reality_short_id text NOT NULL,
+          created_at timestamptz NOT NULL DEFAULT now(),
+          updated_at timestamptz NOT NULL DEFAULT now()
+        )`
+    })
   }
-}
 
-export async function saveMachine(root: string, id: string, spec: MachineSpec): Promise<void> {
-  const current = registrationQueue.then(() => saveMachineUnlocked(root, id, spec))
-  registrationQueue = current.catch(() => undefined)
-  await current
-}
+  async ready(): Promise<void> { await this.sql`SELECT 1` }
+  async close(): Promise<void> { await this.sql.end({ timeout: 5 }) }
 
-export async function getConfig(root: string, role: Role, id: string, platform: Platform): Promise<Buffer | null> {
-  const record = await readRecord(root, id)
-  if (record === null) return null
-  const config = role === 'server'
-    ? serverConfig(id, record.spec, record.credentials)
-    : clientConfig(id, record.spec, record.credentials, platform)
-  return Buffer.from(`${JSON.stringify(config, null, 2)}\n`)
+  async saveMachine(id: string, spec: MachineSpec): Promise<void> {
+    if (!validSlug(id)) throw new Error('invalid id')
+    const c = newCredentials()
+    // One atomic upsert: concurrent registration never replaces established credentials.
+    await this.sql`
+      INSERT INTO machines (
+        id, server, tls_server_name, reality_server_name, certificate_path, key_path,
+        anytls_password, vless_uuid, tuic_uuid, tuic_password, hysteria2_password,
+        reality_private_key, reality_public_key, reality_short_id
+      ) VALUES (
+        ${id}, ${spec.server}, ${spec.tlsServerName}, ${spec.realityServerName}, ${spec.certificatePath}, ${spec.keyPath},
+        ${c.anytlsPassword}, ${c.vlessUUID}, ${c.tuicUUID}, ${c.tuicPassword}, ${c.hysteria2Password},
+        ${c.realityPrivateKey}, ${c.realityPublicKey}, ${c.realityShortID}
+      ) ON CONFLICT (id) DO UPDATE SET
+        server = EXCLUDED.server, tls_server_name = EXCLUDED.tls_server_name,
+        reality_server_name = EXCLUDED.reality_server_name,
+        certificate_path = EXCLUDED.certificate_path, key_path = EXCLUDED.key_path,
+        updated_at = now()`
+  }
+
+  async getConfig(role: Role, id: string, platform: Platform): Promise<Buffer | null> {
+    const [row] = await this.sql`SELECT * FROM machines WHERE id = ${id}`
+    if (!row) return null
+    const spec: MachineSpec = {
+      server: row.server, tlsServerName: row.tls_server_name,
+      realityServerName: row.reality_server_name,
+      certificatePath: row.certificate_path, keyPath: row.key_path,
+    }
+    const c: Credentials = {
+      anytlsPassword: row.anytls_password, vlessUUID: row.vless_uuid,
+      tuicUUID: row.tuic_uuid, tuicPassword: row.tuic_password,
+      hysteria2Password: row.hysteria2_password, realityPrivateKey: row.reality_private_key,
+      realityPublicKey: row.reality_public_key, realityShortID: row.reality_short_id,
+    }
+    const config = role === 'server' ? serverConfig(id, spec, c) : clientConfig(id, spec, c, platform)
+    return Buffer.from(`${JSON.stringify(config, null, 2)}\n`)
+  }
 }
