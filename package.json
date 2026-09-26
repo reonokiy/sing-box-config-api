@@ -1,0 +1,23 @@
+{
+  "name": "sing-box-config-api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/main.ts",
+    "start": "node --experimental-strip-types src/main.ts",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check": "tsc --noEmit && npm test"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.0",
+    "hono": "^4.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
