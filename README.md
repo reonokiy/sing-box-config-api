@@ -1,34 +1,36 @@
 # sing-box registration center
 
-TypeScript + Hono service at `https://api.example.com/sing-box/`.
+TypeScript + Hono service for generating per-machine sing-box configurations.
 Each registered machine gets independent proxy credentials and matching server
 and Linux/macOS client configurations. The service uses the existing Tailnet
 entrypoint without application authentication.
 
 ## Register a machine
 
-`PUT /sing-box/v1/machines/edge-a` with `Content-Type: application/json`:
+`PUT /v1/machines/edge-a` with `Content-Type: application/json`:
 
 ```json
 {
   "server": "edge-a.example.com",
   "tlsServerName": "edge-a.example.com",
   "realityServerName": "www.example.org",
-  "certificatePath": "/etc/sing-box/fullchain.pem",
-  "keyPath": "/etc/sing-box/privkey.pem"
+  "certificatePath": "/etc/fullchain.pem",
+  "keyPath": "/etc/privkey.pem"
 }
 ```
 
-The response contains configuration download paths. Updating the same machine
+The response contains configuration links relative to the registration request URL
+(for example, `../config/server/edge-a/linux`). Resolve them against that URL,
+not the site root. Updating the same machine
 ID preserves its credentials; different IDs receive independent passwords,
 UUIDs, and Reality key pairs. Machine records use a dedicated PostgreSQL database. Each field has an
 explicit column; atomic upserts preserve credentials during concurrent updates. There is no token management API.
 
 ## Download configurations
 
-- Server: `/sing-box/v1/config/server/edge-a/linux`
-- Linux client: `/sing-box/v1/config/client/edge-a/linux`
-- macOS client: `/sing-box/v1/config/client/edge-a/macos`
+- Server: `/v1/config/server/edge-a/linux`
+- Linux client: `/v1/config/client/edge-a/linux`
+- macOS client: `/v1/config/client/edge-a/macos`
 
 The server JSON is portable across Linux and macOS (`server/edge-a/macos`
 returns the same configuration). Responses support ETag/If-None-Match and
@@ -65,3 +67,12 @@ The application needs no persistent volume. PostgreSQL supplies durable storage
 and backup. `/healthz` checks the process; `/readyz` checks database access.
 Images contain code only; no machine records or proxy credentials are committed
 or bundled into the image.
+
+## Reverse proxy deployment
+
+The application serves `/`, `/v1/machines/:id`, and `/v1/config/:role/:id/:platform`.
+A reverse proxy owns any external path prefix and strips it before forwarding.
+No base-path setting or forwarded-prefix header is needed by the application.
+For example, the gateway can map `/registry/v1/machines/edge-a` to
+`/v1/machines/edge-a`. Canonicalize the mount root to a trailing slash at the
+gateway so the discovery document's relative paths resolve correctly.

@@ -15,8 +15,8 @@ const spec = {
   server: 'edge.example.com',
   tlsServerName: 'edge.example.com',
   realityServerName: 'www.example.org',
-  certificatePath: '/etc/sing-box/fullchain.pem',
-  keyPath: '/etc/sing-box/privkey.pem',
+  certificatePath: '/etc/fullchain.pem',
+  keyPath: '/etc/privkey.pem',
 }
 
 before(async () => {
@@ -38,7 +38,7 @@ after(async () => {
 })
 
 async function register(id: string, body = spec) {
-  return admin.request(`/sing-box/v1/machines/${id}`, {
+  return admin.request(`/v1/machines/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -53,7 +53,7 @@ test('generates matching server/client credentials for each machine', async () =
   assert.equal(second.status, 200)
 
   const get = (role: string, id: string, platform: string) => read.request(
-    `/sing-box/v1/config/${role}/${id}/${platform}`,
+    `/v1/config/${role}/${id}/${platform}`,
   )
 
   const serverResponse = await get('server', 'laptop', 'linux')
@@ -85,7 +85,7 @@ test('generates matching server/client credentials for each machine', async () =
 })
 
 test('rejects invalid machine specs and IDs', async () => {
-  assert.equal((await admin.request('/sing-box/v1/machines/Bad-ID', {
+  assert.equal((await admin.request('/v1/machines/Bad-ID', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(spec),
@@ -103,4 +103,23 @@ test('concurrent registration preserves credentials and database reconnect keeps
   const reconnected = new PostgresStore(url.toString())
   try { assert.equal((await reconnected.getConfig('server', 'concurrent', 'linux'))?.toString(), before?.toString()) }
   finally { await reconnected.close() }
+})
+
+
+test('configuration links resolve under any gateway mount path', async () => {
+  const root = await (await read.request('/')).json() as any
+  assert.equal(root.register, 'PUT v1/machines/{id}')
+  assert.equal((await read.request('/registry/')).status, 404)
+  for (const mount of ['/', '/registry/', '/nested/proxy/']) {
+    const requestUrl = new URL('v1/machines/links', 'https://api.example.com' + mount)
+    const response = await register('links')
+    const links = await response.json() as any
+    for (const link of [links.server, links.client.linux, links.client.macos]) {
+      const external = new URL(link, requestUrl)
+      assert.equal(external.origin, requestUrl.origin)
+      assert.ok(external.pathname.startsWith(mount + 'v1/config/'))
+      const upstreamPath = '/' + external.pathname.slice(mount.length)
+      assert.equal((await read.request(upstreamPath)).status, 200)
+    }
+  }
 })

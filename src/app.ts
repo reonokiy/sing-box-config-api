@@ -47,7 +47,7 @@ function baseApp(): Hono {
     c.header('Referrer-Policy', 'no-referrer')
   })
   app.get('/healthz', (c) => c.text('ok'))
-  app.get('/sing-box/', (c) => c.json({ service: 'sing-box registry', register: 'PUT /sing-box/v1/machines/{id}', config: 'GET /sing-box/v1/config/{server|client}/{id}/{linux|macos}' }))
+  app.get('/', (c) => c.json({ service: 'sing-box registry', register: 'PUT v1/machines/{id}', config: 'GET v1/config/{server|client}/{id}/{linux|macos}' }))
   return app
 }
 
@@ -58,7 +58,7 @@ export function createApp(settings: Settings): Hono {
     try { await settings.store.ready(); return c.text('ok') }
     catch { return c.text('Database unavailable', 503) }
   })
-  app.get('/sing-box/v1/config/:role/:id/:platform', async (c) => {
+  app.get('/v1/config/:role/:id/:platform', async (c) => {
     const { role, id, platform } = c.req.param()
     if (!target(role, id, platform)) return c.notFound()
     const data = await settings.store.getConfig(role, id, platform as Platform)
@@ -68,7 +68,7 @@ export function createApp(settings: Settings): Hono {
     if (c.req.header('If-None-Match') === hash) return c.body(null, 304)
     return c.body(data.toString('utf8'), 200, { 'Content-Type': 'application/json; charset=utf-8' })
   })
-  app.put('/sing-box/v1/machines/:id', async (c) => {
+  app.put('/v1/machines/:id', async (c) => {
     const id = c.req.param('id')
     if (!validSlug(id)) return c.notFound()
     if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
@@ -80,7 +80,7 @@ export function createApp(settings: Settings): Hono {
       const body = await readLimitedBody(c.req.raw.body)
       const spec = parseSpec(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
       await settings.store.saveMachine(id, spec)
-      return c.json({ id, server: `/sing-box/v1/config/server/${id}/linux`, client: { linux: `/sing-box/v1/config/client/${id}/linux`, macos: `/sing-box/v1/config/client/${id}/macos` } })
+      return c.json({ id, server: `../config/server/${id}/linux`, client: { linux: `../config/client/${id}/linux`, macos: `../config/client/${id}/macos` } })
     } catch (error) {
       if (error instanceof PayloadTooLarge) return c.text('Payload too large', 413)
       if (error instanceof SyntaxError || error instanceof TypeError ||
