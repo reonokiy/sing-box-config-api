@@ -34,6 +34,7 @@ export function managedServer(id: string, spec: MachineSpec, users: Map<string, 
   const config = serverConfig(id, spec, users.get('default')!) as any
   config.log.level = policy.logLevel
   config.inbounds = config.inbounds.filter((i: any) => policy.enabled && policy.protocols.includes(i.type))
+  if (!config.inbounds.some((i: any) => i.type !== 'vless')) delete config.certificate_providers
   for (const inbound of config.inbounds) {
     inbound.listen_port = policy.ports[inbound.type as Protocol]
     inbound.users = policy.users.map(name => {

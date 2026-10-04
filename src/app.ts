@@ -1,5 +1,6 @@
 import { controlRoutes } from './control.ts'
 import { Hono } from 'hono'
+import { parsePolicy } from './policy.ts'
 import { parseSpec } from './generate.ts'
 import { etag, validSlug, type PostgresStore, type Platform, type Role } from './store.ts'
 
@@ -114,8 +115,11 @@ export function createApp(settings: Settings): Hono {
     if (length > 16 * 1024) return c.text('Payload too large', 413)
     try {
       const body = await readLimitedBody(c.req.raw.body)
-      const spec = parseSpec(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
-      await settings.store.saveMachine(id, spec)
+      const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+      const policy = value?.policy === undefined ? undefined : parsePolicy(value.policy)
+      if (policy && (policy.users.length !== 1 || policy.users[0] !== 'default')) return c.text('Invalid initial users', 400)
+      const spec = parseSpec(value, policy?.protocols)
+      if (!await settings.store.saveMachine(id, spec, policy)) return c.text('Machine already exists', 409)
       return c.json({ id, server: `../config/server/${id}/linux`, client: { linux: `../config/client/${id}/linux`, macos: `../config/client/${id}/macos` } })
     } catch (error) {
       if (error instanceof PayloadTooLarge) return c.text('Payload too large', 413)

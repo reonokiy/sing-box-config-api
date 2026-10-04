@@ -75,7 +75,8 @@ export function controlRoutes(store: PostgresStore): Hono {
     try {
       const b = body(c)
       if (!b || !Number.isInteger(b.baseVersion) || b.baseVersion < 1) return c.text('Invalid draft',400)
-      return respond(c,await store.stage(c.req.param('id'),parseSpec(b.spec),parsePolicy(b.policy),b.baseVersion))
+      const policy = parsePolicy(b.policy)
+      return respond(c,await store.stage(c.req.param('id'),parseSpec(b.spec,policy.protocols),policy,b.baseVersion))
     } catch(e) { if (e instanceof TypeError || (e instanceof Error && e.message === 'invalid machine spec')) return c.text('Invalid draft',400); throw e }
   })
   for (const action of ['publish','rollback']) app.post('/v1/machines/:id/'+action,async c => {

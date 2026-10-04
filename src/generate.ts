@@ -25,20 +25,21 @@ export type Credentials = {
 const domain = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 const address = /^(?:[a-z0-9.-]{1,253}|[0-9a-f:]+)$/i
 
-export function parseSpec(value: unknown): MachineSpec {
+export function parseSpec(value: unknown, protocols: readonly string[] = ['anytls', 'vless', 'tuic', 'hysteria2']): MachineSpec {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('invalid machine spec')
   const spec = value as Record<string, unknown>
+  const validDomain = (value: unknown, required: boolean) => (!required && (value === undefined || value === '')) || typeof value === 'string' && domain.test(value)
   if (typeof spec.server !== 'string' || !address.test(spec.server) || spec.server.includes('..') ||
-      typeof spec.tlsServerName !== 'string' || !domain.test(spec.tlsServerName) ||
-      typeof spec.realityServerName !== 'string' || !domain.test(spec.realityServerName) ||
+      !validDomain(spec.tlsServerName, protocols.some(p => p !== 'vless')) ||
+      !validDomain(spec.realityServerName, protocols.includes('vless')) ||
       (spec.acmeEmail !== undefined && (typeof spec.acmeEmail !== 'string' ||
         spec.acmeEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(spec.acmeEmail)))) {
     throw new Error('invalid machine spec')
   }
   return {
     server: spec.server,
-    tlsServerName: spec.tlsServerName,
-    realityServerName: spec.realityServerName,
+    tlsServerName: (spec.tlsServerName ?? '') as string,
+    realityServerName: (spec.realityServerName ?? '') as string,
     ...(spec.acmeEmail === undefined ? {} : { acmeEmail: spec.acmeEmail as string }),
   }
 }

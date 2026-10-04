@@ -76,6 +76,18 @@ try {
   assert.equal((await (await fetch(base+'/v1/machines/docker-test')).json()).version,2)
   assert.equal((await fetch(base+'/v1/machines/docker-test/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"baseVersion":2,"version":1}'})).status,200)
   assert.deepEqual(await (await fetch(new URL(links.server,requestUrl))).json(),configs.server)
+  for(const protocol of ['anytls','vless','tuic','hysteria2']) {
+    const id='syntax-only-'+protocol
+    const spec={server:'192.0.2.10',...(protocol==='vless'?{realityServerName:'www.example.org'}:{tlsServerName:'edge.example.com'}),policy:{protocols:[protocol]}}
+    assert.equal((await fetch(base+'/v1/machines/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).status,200)
+    for(const role of ['server','client']) {
+      const config=await (await fetch(base+'/v1/config/'+role+'/'+id+'/linux')).json()
+      const file=id+'-'+role+'.json'
+      await writeFile(join(fixtures,file),JSON.stringify(config))
+      docker('run','--rm','--network','none','-v',fixtures+':/fixtures:ro','ghcr.io/sagernet/sing-box:v1.14.0-beta.1','check','-D','/tmp','-c','/fixtures/'+file)
+    }
+  }
+  console.log('Each protocol independently passes official sing-box server/client checks')
   console.log('Managed policy, three real sing-box syntax checks, node scope, restart persistence and rollback PASS')
   // Docker cannot exercise the macOS Network Extension/TUN. Run the same selectors,
   // DNS and routing engine with a mixed inbound and offline synthetic rule sets.
