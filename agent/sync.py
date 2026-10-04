@@ -80,27 +80,31 @@ def healthy():
 def report(settings, version, status, running_version=0):
     request(settings, 'status', {'version': version, 'runningVersion': running_version, 'status': status})
 
-def sync(settings, state_dir):
+def sync(settings, state_dir, runtime=None):
+    config_path = runtime.config_path if runtime else CONFIG_PATH
+    data_dir = runtime.data_dir if runtime else DATA_DIR
+    operate = runtime.service if runtime else service
+    is_healthy = runtime.healthy if runtime else healthy
     state_dir = Path(state_dir)
     state_file = state_dir / 'applied.json'
     previous = json.loads(state_file.read_text()) if state_file.exists() else {}
     etag = previous.get('etag')
-    if not CONFIG_PATH.exists() or hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest() != (etag or '').strip('"'):
+    if not config_path.exists() or hashlib.sha256(config_path.read_bytes()).hexdigest() != (etag or '').strip('"'):
         etag = None
     status, headers, desired = request(settings, 'config', etag=etag)
     if status == 304:
         version = int(headers['X-Config-Version'])
         current = 'applied' if previous.get('enabled', True) else 'stopped'
-        if previous.get('enabled', True) and not healthy():
+        if previous.get('enabled', True) and not is_healthy():
             try:
-                service('restart')
-                if not healthy():
+                operate('restart')
+                if not is_healthy():
                     raise RuntimeError('service unhealthy')
             except Exception:
                 report(settings, version, 'failed_start')
                 return
         if not previous.get('enabled', True):
-            service('stop')
+            operate('stop')
         previous['version'] = version
         atomic(state_file, encode(previous))
         report(settings, version, current, version if current == 'applied' else 0)
@@ -121,16 +125,16 @@ def sync(settings, state_dir):
         if failure.get('hash') == desired['hash'] and failure.get('version') == version:
             report(settings, version, failure['status'], failure.get('runningVersion', 0))
             return
-    with tempfile.TemporaryDirectory(dir=state_dir) as staging:
+    with tempfile.TemporaryDirectory(dir=runtime.staging_dir if runtime else state_dir) as staging:
         candidate = Path(staging) / 'config.json'
         atomic(candidate, candidate_data)
         # Capture and discard output: sing-box diagnostics may include private material.
-        result = subprocess.run(['sing-box', 'check', '-D', DATA_DIR, '-c', str(candidate)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-        if result.returncode:
+        valid = runtime.check(candidate) if runtime else subprocess.run(['sing-box', 'check', '-D', data_dir, '-c', str(candidate)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30).returncode == 0
+        if not valid:
             atomic(failure_file, encode({'version': version, 'hash': desired['hash'], 'status': 'failed_validation', 'runningVersion': previous.get('version', 0) if previous.get('enabled', True) else 0}))
             report(settings, version, 'failed_validation', previous.get('version', 0) if previous.get('enabled', True) else 0)
             return
-        config = CONFIG_PATH
+        config = config_path
         old = previous['document'].encode('utf8') if 'document' in previous else config.read_bytes() if config.exists() else None
         # Keep the last good document with its version in one atomic state file.
         # A crash after replacing config.json must not destroy the rollback copy.
@@ -139,20 +143,20 @@ def sync(settings, state_dir):
             atomic(state_file, encode(previous))
         atomic(config, candidate_data)
         try:
-            service('restart' if desired['enabled'] else 'stop')
-            if desired['enabled'] and not healthy():
+            operate('restart' if desired['enabled'] else 'stop')
+            if desired['enabled'] and not is_healthy():
                 raise RuntimeError('service unhealthy')
         except Exception:
             failed = 'failed_start'
             try:
                 if old is not None:
                     atomic(config, old)
-                    service('restart' if previous.get('enabled', True) else 'stop')
-                    if previous.get('enabled', True) and not healthy():
+                    operate('restart' if previous.get('enabled', True) else 'stop')
+                    if previous.get('enabled', True) and not is_healthy():
                         failed = 'failed_rollback'
                 else:
                     config.unlink(missing_ok=True)
-                    service('stop')
+                    operate('stop')
             except Exception:
                 failed = 'failed_rollback'
             atomic(failure_file, encode({'version': version, 'hash': desired['hash'], 'status': failed, 'runningVersion': previous.get('version', 0) if failed != 'failed_rollback' and previous.get('enabled', True) else 0}))

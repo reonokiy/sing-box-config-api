@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { proxyCompose } from './compose.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { parseSpec } from './generate.ts'
@@ -33,6 +34,13 @@ export function controlRoutes(store: PostgresStore): Hono {
   app.get('/v1/agent/bootstrap.py',async c => {
     c.header('Content-Type','text/x-python; charset=utf-8')
     return c.body(await readFile(new URL('../agent/sync.py',import.meta.url)))
+  })
+  app.get('/v1/agent/:id/compose.yaml',c => {
+    const id = c.req.param('id')
+    if (!validSlug(id)) return c.notFound()
+    c.header('Content-Type','application/yaml; charset=utf-8')
+    c.header('Content-Disposition','attachment; filename=compose.yaml')
+    return c.body(proxyCompose(id))
   })
   app.get('/v1/machines',async c => c.json({ machines: await store.listMachines(), defaultPolicy: defaultPolicy() }))
   app.get('/v1/machines/:id',async c => {

@@ -1,0 +1,8 @@
+FROM python:3.13-alpine3.22@sha256:e81548ac35b07a3bd4805f275107592ef458b1e893c0e04d45aedaa19416cca5
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+LABEL org.opencontainers.image.source="https://github.com/reonokiy/sing-box-config-api"
+WORKDIR /app
+COPY agent/sync.py agent/container.py ./
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD ["python3", "/app/container.py", "health"]
+ENTRYPOINT ["python3", "/app/container.py"]
+CMD ["run"]

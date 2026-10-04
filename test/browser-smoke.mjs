@@ -36,7 +36,7 @@ try {
   await page.getByRole('button',{name:'生成一次性接入码',exact:true}).click()
   await page.locator('#enrollment').waitFor({state:'visible'})
   assert.equal((await page.locator('#code').textContent()).length,43)
-  assert.ok((await page.locator('#install').textContent()).includes('--id browser-test'))
+  assert.ok((await page.locator('#install').textContent()).includes('/v1/agent/browser-test/compose.yaml'))
   page.once('dialog',dialog=>dialog.accept())
   await page.getByRole('button',{name:'撤销机器授权',exact:true}).click()
   await page.locator('#enrollment').waitFor({state:'hidden'})
