@@ -185,7 +185,8 @@ routing. Credential material is excluded from machine lists, drafts and history.
    It verifies the hash and runs `sing-box check`, atomically replaces the config,
    restarts/stops the service, verifies startup, and reports the attempted and
    actual running versions. Validation/startup failures retain or restore the
-   previous configuration. Failed rollback is reported distinctly. Raw logs and
+   previous configuration. The last good document and version are persisted
+   atomically, preserving the rollback copy across synchronizer crashes. Failed rollback is reported distinctly. Raw logs and
    configuration are never sent in status reports.
 5. Roll back from history to publish a new version containing the earlier
    settings. Revoking node access stops future sync; it does not remotely kill

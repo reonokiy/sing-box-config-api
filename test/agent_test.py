@@ -23,7 +23,7 @@ class SyncTests(unittest.TestCase):
         self.new = {'log':{'level':'warn'},'inbounds':[]}
         agent.atomic(self.config,agent.encode(self.old))
         self.state = self.directory / 'applied.json'
-        agent.atomic(self.state,agent.encode({'version':1,'enabled':True,'etag':'"'+hashlib.sha256(agent.encode(self.old)).hexdigest()+'"'}))
+        agent.atomic(self.state,agent.encode({'version':1,'enabled':True,'document':agent.encode(self.old).decode(),'etag':'"'+hashlib.sha256(agent.encode(self.old)).hexdigest()+'"'}))
         self.desired = {'version':2,'enabled':True,'config':self.new,'document':agent.encode(self.new).decode(),'hash':hashlib.sha256(agent.encode(self.new)).hexdigest()}
         self.reports = []
     def tearDown(self):
@@ -59,6 +59,12 @@ class SyncTests(unittest.TestCase):
         self.assertEqual(json.loads(self.config.read_text()),self.old)
         self.assertEqual(json.loads(self.state.read_text())['version'],1)
         self.assertEqual(self.reports[-1],{'version':2,'runningVersion':1,'status':'failed_start'})
+    def test_crash_after_replacement_recovers_from_persisted_last_good_document(self):
+        agent.atomic(self.config,agent.encode(self.new))
+        self.run_sync(operations=[RuntimeError(),None])
+        self.assertEqual(json.loads(self.config.read_text()),self.old)
+        self.assertEqual(json.loads(self.state.read_text())['version'],1)
+        self.assertEqual(self.reports[-1]['runningVersion'],1)
     def test_failed_rollback_is_reported_without_claiming_running_version(self):
         self.run_sync(operations=[RuntimeError(),RuntimeError()])
         self.assertEqual(self.reports[-1],{'version':2,'runningVersion':0,'status':'failed_rollback'})

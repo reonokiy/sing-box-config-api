@@ -131,7 +131,12 @@ def sync(settings, state_dir):
             report(settings, version, 'failed_validation', previous.get('version', 0) if previous.get('enabled', True) else 0)
             return
         config = CONFIG_PATH
-        old = config.read_bytes() if config.exists() else None
+        old = previous['document'].encode('utf8') if 'document' in previous else config.read_bytes() if config.exists() else None
+        # Keep the last good document with its version in one atomic state file.
+        # A crash after replacing config.json must not destroy the rollback copy.
+        if old is not None and 'document' not in previous:
+            previous['document'] = old.decode('utf8')
+            atomic(state_file, encode(previous))
         atomic(config, candidate_data)
         try:
             service('restart' if desired['enabled'] else 'stop')
@@ -153,7 +158,7 @@ def sync(settings, state_dir):
             atomic(failure_file, encode({'version': version, 'hash': desired['hash'], 'status': failed, 'runningVersion': previous.get('version', 0) if failed != 'failed_rollback' and previous.get('enabled', True) else 0}))
             report(settings, version, failed, previous.get('version', 0) if failed != 'failed_rollback' and previous.get('enabled', True) else 0)
             return
-    atomic(state_file, encode({'version': version, 'enabled': desired['enabled'], 'etag': headers['ETag']}))
+    atomic(state_file, encode({'version': version, 'enabled': desired['enabled'], 'etag': headers['ETag'], 'document': desired['document']}))
     failure_file.unlink(missing_ok=True)
     report(settings, version, 'applied' if desired['enabled'] else 'stopped', version if desired['enabled'] else 0)
 
