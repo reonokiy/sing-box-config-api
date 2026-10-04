@@ -53,6 +53,30 @@ try {
   console.log('Independent personal client and restart persistence PASS')
   assert.deepEqual(await (await fetch(new URL(links.client.macos, requestUrl))).json(), configs.macos)
   console.log('API registration, ETag, paired credentials and restart persistence PASS')
+  const policy = { enabled: true, protocols: ['anytls','tuic'], ports: { anytls: 9443, vless: 8443, tuic: 9443, hysteria2: 8443 }, users: ['default','alice'], logLevel: 'warn', dns: { servers: [{ type: 'local', tag: 'local' }], final: 'local' }, route: { rules: [{ domain_suffix: ['example.com'], action: 'route', outbound: 'DIRECT' }], final: 'DIRECT' } }
+  assert.equal((await fetch(base+'/v1/machines/docker-test/draft',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({baseVersion:1,spec:{server:'192.0.2.10',tlsServerName:'edge.example.com',realityServerName:'www.example.org'},policy})})).status,200)
+  assert.equal((await fetch(base+'/v1/machines/docker-test/publish',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"baseVersion":1}'})).status,200)
+  for (const [name,path] of Object.entries({ managedServer:'/v1/config/server/docker-test/linux',managedLinux:'/v1/config/client/docker-test/linux?user=alice',managedMacos:'/v1/config/client/docker-test/macos?user=alice' })) {
+    const response=await fetch(base+path);assert.equal(response.status,200)
+    const generated=await response.json()
+    await writeFile(join(fixtures,name+'.json'),JSON.stringify(generated))
+    docker('run','--rm','--network','none','-v',fixtures+':/fixtures:ro','ghcr.io/sagernet/sing-box:v1.14.0-beta.1','check','-D','/tmp','-c','/fixtures/'+name+'.json')
+  }
+  const codeResponse=await fetch(base+'/v1/machines/docker-test/enrollment',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+  const {code}=await codeResponse.json()
+  const joinResponse=await fetch(base+'/v1/agent/docker-test/enroll',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})})
+  assert.equal(joinResponse.status,200)
+  const {token}=await joinResponse.json()
+  const nodeHeaders={Authorization:'Bearer '+token}
+  const desiredResponse=await fetch(base+'/v1/agent/docker-test/config',{headers:nodeHeaders});assert.equal(desiredResponse.status,200)
+  assert.equal((await desiredResponse.json()).version,2)
+  assert.equal((await fetch(base+'/v1/machines',{headers:nodeHeaders})).status,403)
+  compose('restart','api');await ready(base+'/readyz')
+  assert.equal((await fetch(base+'/v1/agent/docker-test/config',{headers:nodeHeaders})).status,200)
+  assert.equal((await (await fetch(base+'/v1/machines/docker-test')).json()).version,2)
+  assert.equal((await fetch(base+'/v1/machines/docker-test/rollback',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"baseVersion":2,"version":1}'})).status,200)
+  assert.deepEqual(await (await fetch(new URL(links.server,requestUrl))).json(),configs.server)
+  console.log('Managed policy, three real sing-box syntax checks, node scope, restart persistence and rollback PASS')
   // Docker cannot exercise the macOS Network Extension/TUN. Run the same selectors,
   // DNS and routing engine with a mixed inbound and offline synthetic rule sets.
   const runtime = structuredClone(configs.macos)
@@ -75,13 +99,7 @@ try {
   console.log('Two-endpoint runtime and live Tailnet selector switching PASS (offline; no network logins)')
 } catch (error) {
   // Avoid dumping generated configuration or subprocess buffers containing credentials.
-  console.error('Docker smoke test failed: ' + (error instanceof assert.AssertionError ? error.message : error.message.split('\n')[0]))
-  try {
-    const result = spawnSync('docker', ['logs', runtimeName], { encoding: 'utf8' })
-    const logs = result.stdout + result.stderr
-    console.error(docker('inspect', runtimeName, '--format', '{{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}').toString())
-    console.error(logs.split('\n').map(line => line.replace(/[A-Za-z0-9_\/-]{30,}/g, '[redacted]')).slice(0,18).join('\n'))
-  } catch {}
+  console.error('Docker smoke test failed; inspect the failing stage without printing configuration.')
   process.exitCode = 1
 } finally {
   try { docker('rm', '-f', runtimeName) } catch {}

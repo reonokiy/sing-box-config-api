@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_USER: registry
       POSTGRES_DB: registry
-      POSTGRES_PASSWORD: registry-test-only
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - '127.0.0.1:15487:5432'
     tmpfs:
@@ -21,7 +21,6 @@ services:
       PGHOST: db
       PGDATABASE: registry
       PGUSER: registry
-      PGPASSWORD: registry-test-only
       HEADSCALE_URL: https://hs.example.com
       HEADSCALE_DOMAINS: tailnet
       HEADSCALE_PUBLIC_DOMAINS: internal.example.com

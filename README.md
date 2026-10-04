@@ -153,3 +153,76 @@ of other clients. Starting it on the Mac and completing the Headscale/Pocket ID
 login joins the actual device; saving a client record does not enroll a node
 or change the Tailnet ACL. This endpoint is protected by the same deployment
 boundary as the rest of the registry.
+
+## Managed proxy servers
+
+Open `https://api.internal.nokiy.net/sing-box/manage/` through the owner-only
+Headscale network. No management-key input is needed on this private route.
+The public administrative API still requires the sing-box application's Keygate
+key and its Pocket ID group. The page manages independent server addresses,
+TLS/Reality names, enabled protocols and ports, proxy users, log level, DNS and
+routing. Credential material is excluded from machine lists, drafts and history.
+
+1. Add a server, then edit and save its draft. Saving does not change the active
+   configuration. Publish explicitly; stale editors receive HTTP 409.
+2. Generate a one-time enrollment code. It expires after ten minutes and can be
+   redeemed once. On the Linux proxy install Python 3 and a compatible sing-box
+   package with its standard `sing-box.service`, reading `/etc/sing-box/config.json`
+   and preserving `/var/lib/sing-box`. Generated profiles are checked against
+   sing-box `v1.14.0-beta.1`; a matching build including ACME is required.
+3. Download the bootstrap program and install it (these arguments contain no
+   credentials):
+
+   ```sh
+   sudo curl -fsS https://api.nokiy.net/sing-box/v1/agent/bootstrap.py -o /usr/local/lib/sing-box-bootstrap.py
+   sudo python3 /usr/local/lib/sing-box-bootstrap.py install --url https://api.nokiy.net/sing-box --id edge-01
+   ```
+
+   Enter the code at the hidden prompt. The program exchanges it for a node-only
+   credential and installs a systemd timer. The credential stays in a root-only
+   file and is sent in an Authorization header, never URL parameters or argv.
+4. Every 30 seconds plus jitter, the node checks for a new desired configuration.
+   It verifies the hash and runs `sing-box check`, atomically replaces the config,
+   restarts/stops the service, verifies startup, and reports the attempted and
+   actual running versions. Validation/startup failures retain or restore the
+   previous configuration. Failed rollback is reported distinctly. Raw logs and
+   configuration are never sent in status reports.
+5. Roll back from history to publish a new version containing the earlier
+   settings. Revoking node access stops future sync; it does not remotely kill
+   the already-running proxy. To stop a reachable proxy, publish `enabled:false`
+   and wait for its `stopped` acknowledgement before revoking access.
+
+The node never needs an inbound management port. Existing proxy listener/ACME
+ports and DNS still need provisioning on that server. Revocation, rotation,
+expiry and enrollment are enforced in the API and stored as hashes. A node
+cannot download another node's credentials, edit settings or obtain client
+profiles. A fresh enrollment replaces the old node credential immediately.
+
+A user ID `default` retains the server's existing protocol credentials; extra
+user IDs get independent credentials preserved across removal/re-add and
+rollback. Removing a user publishes server and paired-client changes together;
+existing proxy sessions are terminated by the server restart. Client downloads
+accept `?user=alice`; clients must refresh/import the updated profile themselves.
+Personal Headscale-only macOS profiles remain independent of proxy servers.
+
+Management routes (all relative to `/sing-box/`):
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `v1/machines` / `v1/machines/{id}` | Safe list and detail/status |
+| PUT | `v1/machines/{id}/draft` | `{baseVersion,spec,policy}` |
+| POST | `v1/machines/{id}/publish` | `{baseVersion}` |
+| GET | `v1/machines/{id}/versions/{version}` | Historical settings without credentials |
+| POST | `v1/machines/{id}/rollback` | `{baseVersion,version}` |
+| POST | `v1/machines/{id}/enrollment` | Issue single-use code |
+| POST | `v1/machines/{id}/revoke` | Revoke node and outstanding enrollment |
+
+Only the namespace `v1/agent/` bypasses Keygate on the public gateway. Its enroll
+endpoint requires a single-use code; config/status require that machine's bearer
+credential. The bootstrap source is public and contains no credential. All
+other public routes retain fail-closed Keygate application authorization.
+
+Existing `PUT v1/machines/{id}` remains backward compatible: registration/address
+changes publish immediately while preserving credentials and managed policy.
+Use the draft API/UI for reviewed changes. Published versions are immutable;
+rollback appends a new version rather than overwriting history.

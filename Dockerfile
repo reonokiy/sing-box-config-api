@@ -9,6 +9,8 @@ ENV NODE_ENV=production
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY src ./src
+COPY web ./web
+COPY agent ./agent
 USER node
 EXPOSE 3000
 CMD ["node", "--experimental-strip-types", "src/main.ts"]
