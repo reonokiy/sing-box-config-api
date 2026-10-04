@@ -149,7 +149,7 @@ export class PostgresStore {
     })
   }
   async listMachines(): Promise<any[]> {
-    return this.sql`SELECT id,server,version,policy->'enabled' AS enabled,last_seen,reported_version,reported_running_version,reported_status,reported_at FROM machines ORDER BY id`
+    return this.sql`SELECT id,server,version,COALESCE((policy->>'enabled')::boolean,true) AS enabled,last_seen,reported_version,reported_running_version,reported_status,reported_at FROM machines ORDER BY id`
   }
   async machine(id: string): Promise<any | null> {
     const [row] = await this.sql`SELECT id,server,tls_server_name,reality_server_name,acme_email,policy,version,last_seen,reported_version,reported_running_version,reported_status,reported_at,agent_token_hash IS NOT NULL AS enrolled FROM machines WHERE id=${id}`
@@ -229,7 +229,7 @@ export class PostgresStore {
       const users = new Map<string, Credentials>([['default',this.credentials(row)]])
       for (const extra of await sql`SELECT name,credentials FROM machine_users WHERE machine_id=${id}`) users.set(extra.name,extra.credentials)
       const data = Buffer.from(JSON.stringify(managedServer(id,this.spec(row),users,policy),null,2)+'\n')
-      return { version: row.version, enabled: parsePolicy(row.policy).enabled, config: JSON.parse(data!.toString()), hash: etag(data!).slice(1,-1) }
+      return { version: row.version, enabled: parsePolicy(row.policy).enabled, config: JSON.parse(data!.toString()), document: data!.toString(), hash: etag(data!).slice(1,-1) }
     })
   }
   async report(id: string, version: number, runningVersion: number, status: string): Promise<boolean> {

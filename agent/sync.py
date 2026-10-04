@@ -108,7 +108,11 @@ def sync(settings, state_dir):
     if not isinstance(desired.get('version'), int) or type(desired.get('enabled')) is not bool or not isinstance(desired.get('config'), dict):
         raise ValueError('invalid desired configuration')
     version = desired['version']
-    candidate_data = encode(desired['config'])
+    if not isinstance(desired.get('document'), str):
+        raise ValueError('configuration document missing')
+    candidate_data = desired['document'].encode('utf8')
+    if json.loads(candidate_data) != desired['config']:
+        raise ValueError('configuration document mismatch')
     if hashlib.sha256(candidate_data).hexdigest() != desired['hash']:
         raise ValueError('configuration hash mismatch')
     failure_file = state_dir / 'failed.json'

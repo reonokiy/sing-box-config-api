@@ -24,7 +24,7 @@ class SyncTests(unittest.TestCase):
         agent.atomic(self.config,agent.encode(self.old))
         self.state = self.directory / 'applied.json'
         agent.atomic(self.state,agent.encode({'version':1,'enabled':True,'etag':'"'+hashlib.sha256(agent.encode(self.old)).hexdigest()+'"'}))
-        self.desired = {'version':2,'enabled':True,'config':self.new,'hash':hashlib.sha256(agent.encode(self.new)).hexdigest()}
+        self.desired = {'version':2,'enabled':True,'config':self.new,'document':agent.encode(self.new).decode(),'hash':hashlib.sha256(agent.encode(self.new)).hexdigest()}
         self.reports = []
     def tearDown(self):
         self.path_patch.stop()
@@ -87,6 +87,12 @@ class SyncTests(unittest.TestCase):
             return self.request(settings,path,body,etag)
         with patch.object(agent,'request',side_effect=response),patch.object(agent.subprocess,'run',return_value=subprocess.CompletedProcess([],0)),patch.object(agent,'healthy',return_value=True),patch.object(agent,'service'):agent.sync(self.settings,self.directory)
         self.assertEqual(json.loads(self.config.read_text()),self.new)
+    def test_wire_document_retains_number_formatting_and_hash(self):
+        self.desired['config']={'route':{'rules':[{'example_number':1e-7}]}}
+        self.desired['document']='{"route":{"rules":[{"example_number":1e-7}]}}\n'
+        self.desired['hash']=hashlib.sha256(self.desired['document'].encode()).hexdigest()
+        self.run_sync()
+        self.assertEqual(self.config.read_bytes(),self.desired['document'].encode())
     def test_url_validation_rejects_plaintext_and_credentials_in_urls(self):
         for url in ['http://example.com','https://example.com?api_key=synthetic','https://user:synthetic@example.com','https://example.com/#fragment']:
             with self.assertRaises(ValueError):agent.validate_url(url)
