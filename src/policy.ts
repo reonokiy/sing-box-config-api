@@ -15,14 +15,25 @@ export type Policy = {
 export function defaultPolicy(): Policy {
   return { enabled: true, protocols: [...protocols], ports: { anytls: 443, vless: 8443, tuic: 443, hysteria2: 8443 }, users: ['default'], logLevel: 'info' }
 }
+export function unconfiguredPolicy(): Policy {
+  return { ...defaultPolicy(), enabled: false, protocols: [] }
+}
+export function requiredPorts(policy: Policy): { transport: 'TCP' | 'UDP', port: number }[] {
+  if (!policy.enabled) return []
+  const ports: { transport: 'TCP' | 'UDP', port: number }[] = []
+  if (policy.protocols.some(p => p !== 'vless')) ports.push({ transport: 'TCP', port: 80 })
+  for (const p of policy.protocols) ports.push({ transport: p === 'anytls' || p === 'vless' ? 'TCP' : 'UDP', port: policy.ports[p] })
+  return ports
+}
 const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v)
 export function parsePolicy(value: unknown): Policy {
   const fail = () => { throw new TypeError('Invalid policy') }
   if (!object(value) || Object.keys(value).some(k => !['enabled', 'protocols', 'ports', 'users', 'logLevel', 'dns', 'route'].includes(k))) return fail()
   const p = { ...defaultPolicy(), ...value }
-  if (typeof p.enabled !== 'boolean' || !Array.isArray(p.protocols) || p.protocols.length === 0 || p.protocols.some(t => !protocols.includes(t as Protocol)) || new Set(p.protocols).size !== p.protocols.length) return fail()
+  if (typeof p.enabled !== 'boolean' || !Array.isArray(p.protocols) || (p.enabled && p.protocols.length === 0) || p.protocols.some(t => !protocols.includes(t as Protocol)) || new Set(p.protocols).size !== p.protocols.length) return fail()
   if (!object(p.ports) || Object.keys(p.ports).length !== 4 || protocols.some(t => !Number.isInteger(p.ports[t]) || (p.ports[t] as number) < 1 || (p.ports[t] as number) > 65535)) return fail()
   if ((p.protocols.includes('anytls') && p.protocols.includes('vless') && p.ports.anytls === p.ports.vless) || (p.protocols.includes('tuic') && p.protocols.includes('hysteria2') && p.ports.tuic === p.ports.hysteria2)) return fail()
+  if (p.enabled && p.protocols.some(t => t !== 'vless') && p.protocols.some(t => (t === 'anytls' || t === 'vless') && p.ports[t] === 80)) return fail()
   if (!Array.isArray(p.users) || !p.users.includes('default') || p.users.length > 64 || new Set(p.users).size !== p.users.length || p.users.some(u => typeof u !== 'string' || !/^[a-z0-9][a-z0-9-]{0,62}$/.test(u))) return fail()
   if (!['debug', 'info', 'warn', 'error'].includes(p.logLevel as string)) return fail()
   if (p.dns !== undefined && !object(p.dns) || p.route !== undefined && !object(p.route)) return fail()
