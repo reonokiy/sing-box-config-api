@@ -47,7 +47,7 @@ function baseApp(): Hono {
     c.header('Referrer-Policy', 'no-referrer')
   })
   app.get('/healthz', (c) => c.text('ok'))
-  app.get('/', (c) => c.json({ service: 'sing-box registry', register: 'PUT v1/machines/{id}', config: 'GET v1/config/{server|client}/{id}/{linux|macos}' }))
+  app.get('/', (c) => c.json({ service: 'sing-box registry', register: 'PUT v1/machines/{id}', config: 'GET v1/config/{server|client}/{id}/{linux|macos}', registerClient: 'PUT v1/clients/{id}', clientConfig: 'GET v1/clients/{id}/config' }))
   return app
 }
 
@@ -57,6 +57,38 @@ export function createApp(settings: Settings): Hono {
   app.get('/readyz', async (c) => {
     try { await settings.store.ready(); return c.text('ok') }
     catch { return c.text('Database unavailable', 503) }
+  })
+  app.put('/v1/clients/:id', async (c) => {
+    const id = c.req.param('id')
+    if (!validSlug(id)) return c.notFound()
+    if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) {
+      return c.text('Expected application/json', 415)
+    }
+    if (Number(c.req.header('Content-Length')) > 16 * 1024) return c.text('Payload too large', 413)
+    try {
+      const body = await readLimitedBody(c.req.raw.body)
+      const spec: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+      if (typeof spec !== 'object' || spec === null || Array.isArray(spec) ||
+        Object.keys(spec).length !== 1 || (spec as Record<string, unknown>).platform !== 'macos') {
+        return c.text('Invalid client spec', 400)
+      }
+      if (!await settings.store.saveClient(id)) return c.text('Headscale is not configured', 503)
+      return c.json({ id, platform: 'macos', config: `./${id}/config` })
+    } catch (error) {
+      if (error instanceof PayloadTooLarge) return c.text('Payload too large', 413)
+      if (error instanceof SyntaxError || error instanceof TypeError) return c.text('Invalid client spec', 400)
+      throw error
+    }
+  })
+  app.get('/v1/clients/:id/config', async (c) => {
+    const id = c.req.param('id')
+    if (!validSlug(id)) return c.notFound()
+    const data = await settings.store.getClientConfig(id)
+    if (data === null) return c.notFound()
+    const hash = etag(data)
+    c.header('ETag', hash)
+    if (c.req.header('If-None-Match') === hash) return c.body(null, 304)
+    return c.body(data.toString('utf8'), 200, { 'Content-Type': 'application/json; charset=utf-8' })
   })
   app.get('/v1/config/:role/:id/:platform', async (c) => {
     const { role, id, platform } = c.req.param()
