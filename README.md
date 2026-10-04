@@ -165,36 +165,60 @@ routing. Credential material is excluded from machine lists, drafts and history.
 
 1. Add a server, then edit and save its draft. Saving does not change the active
    configuration. Publish explicitly; stale editors receive HTTP 409.
-2. Generate a one-time enrollment code. It expires after ten minutes and can be
-   redeemed once. On the Linux proxy install Python 3 and a compatible sing-box
-   package with its standard `sing-box.service`, reading `/etc/sing-box/config.json`
-   and preserving `/var/lib/sing-box`. Generated profiles are checked against
-   sing-box `v1.14.0-beta.1`; a matching build including ACME is required.
-3. Download the bootstrap program and install it (these arguments contain no
-   credentials):
+2. Install Docker with Compose on the Linux proxy and generate a one-time
+   enrollment code. It expires after ten minutes and can be redeemed once.
+3. Download the deployment and enroll (these arguments contain no credentials):
 
    ```sh
-   sudo curl -fsS https://api.nokiy.net/sing-box/v1/agent/bootstrap.py -o /usr/local/lib/sing-box-bootstrap.py
-   sudo python3 /usr/local/lib/sing-box-bootstrap.py install --url https://api.nokiy.net/sing-box --id edge-01
+   curl -fsS https://api.nokiy.net/sing-box/v1/agent/edge-01/compose.yaml -o compose.yaml
+   docker compose run --rm agent enroll
+   docker compose up -d
    ```
 
-   Enter the code at the hidden prompt. The program exchanges it for a node-only
-   credential and installs a systemd timer. The credential stays in a root-only
-   file and is sent in an Authorization header, never URL parameters or argv.
-4. Every 30 seconds plus jitter, the node checks for a new desired configuration.
-   It verifies the hash and runs `sing-box check`, atomically replaces the config,
-   restarts/stops the service, verifies startup, and reports the attempted and
-   actual running versions. Validation/startup failures retain or restore the
-   previous configuration. The last good document and version are persisted
-   atomically, preserving the rollback copy across synchronizer crashes. Failed rollback is reported distinctly. Raw logs and
-   configuration are never sent in status reports.
+   Enter the code at the hidden prompt. The Compose service runs an agent daemon
+   with Docker socket access, which creates and manages a separate official
+   sing-box `v1.14.0-beta.1` container. Docker Engine 26 or later is required for
+   volume subpaths. Neither host Python nor a systemd timer is needed.
+   The persistent `proxy-data` volume holds the node-only credential, committed
+   versions and runtime data with private file permissions. Only its `proxy/`
+   subdirectory is mounted in sing-box, keeping the agent credential separate.
+   Credentials never enter environment variables, Docker metadata or argv.
+   Keep the volume across upgrades; never use `down --volumes` on a real proxy.
+   Before replacing enrollment, run `docker compose stop agent`, then repeat
+   enrollment and start. Stopping/removing the agent leaves the proxy running.
+4. Every 30 seconds plus jitter, the agent verifies the desired document's hash
+   and checks it in a temporary, network-isolated official sing-box container.
+   It replaces configuration and restarts the independent proxy only after
+   validation; startup failures restore the previous committed configuration.
+   Reports distinguish attempted and actual versions. An agent restart keeps
+   an existing proxy running, and recovers a missing/stopped proxy from its
+   cached configuration even when the API is unavailable. Docker handles host
+   reboot for both containers through `unless-stopped`. Interrupted replacement
+   restores the last committed document before fetching new configuration.
+   The agent finishes an in-progress update before shutdown. To request an
+   immediate poll, send SIGHUP with `docker compose kill -s HUP agent`. Proxy diagnostics
+   are not logged because they can contain credentials; agent logs contain
+   only bounded operational messages.
 5. Roll back from history to publish a new version containing the earlier
    settings. Revoking node access stops future sync; it does not remotely kill
    the already-running proxy. To stop a reachable proxy, publish `enabled:false`
    and wait for its `stopped` acknowledgement before revoking access.
 
-The node never needs an inbound management port. Existing proxy listener/ACME
-ports and DNS still need provisioning on that server. Revocation, rotation,
+The proxy uses Linux host networking so published listener-port changes need
+no Compose changes; the agent has no inbound ports and uses Docker's normal
+bridge network. The proxy drops all capabilities except `NET_BIND_SERVICE`,
+has a read-only root filesystem, and receives no Docker socket. The agent has
+all capabilities dropped but Docker socket access grants control of the host's
+Docker daemon; deploy it on a trusted, dedicated Linux proxy host.
+Only containers and volumes with matching ownership labels may be used; a
+name collision with an unrelated container aborts the operation.
+The host firewall must allow configured proxy ports and TCP/80 for ACME
+HTTP-01, and TLS DNS must point to that host. This is a Linux server deployment,
+separate from the macOS client.
+
+To stop a proxy before retiring the agent, publish `enabled:false` and wait for
+`stopped`; `docker compose down` removes the agent but intentionally retains the
+independent proxy. The managed proxy is named `nokiy-sing-box-<machine-id>`. Revocation, rotation,
 expiry and enrollment are enforced in the API and stored as hashes. A node
 cannot download another node's credentials, edit settings or obtain client
 profiles. A fresh enrollment replaces the old node credential immediately.
@@ -227,3 +251,5 @@ Existing `PUT v1/machines/{id}` remains backward compatible: registration/addres
 changes publish immediately while preserving credentials and managed policy.
 Use the draft API/UI for reviewed changes. Published versions are immutable;
 rollback appends a new version rather than overwriting history.
+
+The previous native Python/systemd bootstrap remains available for existing nodes; new UI enrollments use Docker. Agent image and API image are built for linux/amd64 and linux/arm64 from the same revision. Compose downloads contain only a validated machine ID and public image/control-service metadata, not machine configuration.

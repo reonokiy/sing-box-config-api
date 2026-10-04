@@ -101,3 +101,15 @@ test('validates policies, bounded JSON, CSRF and disabled node/client configurat
   assert.equal((await call('/manage/')).status,200);assert.ok((await call('/manage/app.js')).headers.get('Content-Security-Policy'))
   assert.equal((await call('/v1/agent/bootstrap.py')).status,200)
 })
+
+test('public Compose template contains no machine configuration or credentials', async()=>{
+  const response=await call('/v1/agent/not-registered/compose.yaml')
+  assert.equal(response.status,200)
+  assert.match(response.headers.get('Content-Type')!,/application\/yaml/)
+  const yaml=await response.text()
+  assert.ok(yaml.includes('MACHINE_ID: not-registered'))
+  assert.ok(yaml.includes('/var/run/docker.sock:/var/run/docker.sock'))
+  assert.ok(yaml.includes('io.nokiy.managed-proxy.id: not-registered'))
+  assert.equal(/api_key|sba_|token|password|private_key/.test(yaml),false)
+  assert.equal((await call('/v1/agent/bad_ID/compose.yaml')).status,404)
+})

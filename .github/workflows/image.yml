@@ -29,9 +29,11 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
-      - run: python3 -m unittest discover -s test -p agent_test.py
+      - run: python3 -m unittest discover -s test -p '*agent_test.py'
       - run: docker compose -p registry-test -f compose.test.yaml up -d --build
       - run: node test/docker-smoke.mjs
+      - run: docker build -f Dockerfile.agent -t sing-box-agent:test .
+      - run: python3 test/container_smoke.py
       - run: docker run --rm --network host -v "$PWD:/work" -w /work mcr.microsoft.com/playwright:v1.63.0-noble node test/browser-smoke.mjs
       - if: always()
         run: docker compose -p registry-test -f compose.test.yaml down --volumes
@@ -54,6 +56,16 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.agent
           push: true
+          tags: |
+            ghcr.io/reonokiy/sing-box-config-api:agent-${{ github.sha }}
+            ghcr.io/reonokiy/sing-box-config-api:agent-latest
+          platforms: linux/amd64,linux/arm64
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: PROXY_AGENT_IMAGE=ghcr.io/reonokiy/sing-box-config-api:agent-${{ github.sha }}
           tags: ghcr.io/reonokiy/sing-box-config-api:${{ github.sha }}
           platforms: linux/amd64,linux/arm64
