@@ -100,18 +100,18 @@ export class PostgresStore {
     return Buffer.from(`${JSON.stringify(macosClientProfile(row.id, this.macos), null, 2)}\n`)
   }
 
-  async saveMachine(id: string, spec: MachineSpec): Promise<void> {
+  async saveMachine(id: string, spec: MachineSpec, initialPolicy?: Policy): Promise<boolean> {
     if (!validSlug(id)) throw new Error('invalid id')
     const c = newCredentials()
     // One atomic upsert: concurrent registration never replaces established credentials.
-    await this.sql.begin(async sql => {
-      await sql`
+    return this.sql.begin(async sql => {
+      const inserted = await sql`
       INSERT INTO machines (
-        id, server, tls_server_name, reality_server_name, acme_email,
+        id, server, tls_server_name, reality_server_name, acme_email, policy,
         anytls_password, vless_uuid, tuic_uuid, tuic_password, hysteria2_password,
         reality_private_key, reality_public_key, reality_short_id
       ) VALUES (
-        ${id}, ${spec.server}, ${spec.tlsServerName}, ${spec.realityServerName}, ${spec.acmeEmail ?? ''},
+        ${id}, ${spec.server}, ${spec.tlsServerName}, ${spec.realityServerName}, ${spec.acmeEmail ?? ''}, ${sql.json(JSON.parse(JSON.stringify(initialPolicy ?? defaultPolicy())))},
         ${c.anytlsPassword}, ${c.vlessUUID}, ${c.tuicUUID}, ${c.tuicPassword}, ${c.hysteria2Password},
         ${c.realityPrivateKey}, ${c.realityPublicKey}, ${c.realityShortID}
       ) ON CONFLICT (id) DO UPDATE SET
@@ -119,10 +119,12 @@ export class PostgresStore {
         reality_server_name = EXCLUDED.reality_server_name,
         acme_email = EXCLUDED.acme_email, version = machines.version + 1,
         updated_at = now()
-      WHERE (machines.server,machines.tls_server_name,machines.reality_server_name,machines.acme_email)
-        IS DISTINCT FROM (EXCLUDED.server,EXCLUDED.tls_server_name,EXCLUDED.reality_server_name,EXCLUDED.acme_email)`
+      WHERE ${initialPolicy === undefined} AND (machines.server,machines.tls_server_name,machines.reality_server_name,machines.acme_email)
+        IS DISTINCT FROM (EXCLUDED.server,EXCLUDED.tls_server_name,EXCLUDED.reality_server_name,EXCLUDED.acme_email) RETURNING id`
+      if (initialPolicy && inserted.length === 0) return false
       const [row] = await sql`SELECT id,version,policy,server,tls_server_name,reality_server_name,acme_email FROM machines WHERE id=${id} FOR UPDATE`
       await sql`INSERT INTO machine_versions(machine_id,version,spec,policy) VALUES (${id},${row.version},${sql.json(this.spec(row))},${row.policy}) ON CONFLICT DO NOTHING`
+      return true
     })
   }
 

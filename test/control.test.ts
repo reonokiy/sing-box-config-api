@@ -113,3 +113,25 @@ test('public Compose template contains no machine configuration or credentials',
   assert.equal(/api_key|sba_|token|password|private_key/.test(yaml),false)
   assert.equal((await call('/v1/agent/bad_ID/compose.yaml')).status,404)
 })
+
+
+test('initial protocol selection is atomic and requires only the applicable domain', async()=>{
+  for(const protocol of ['anytls','tuic','hysteria2','vless']) {
+    const id='only-'+protocol
+    const selected={...defaultPolicy(),protocols:[protocol]}
+    const domain=protocol==='vless'?{realityServerName:spec.realityServerName}:{tlsServerName:spec.tlsServerName}
+    assert.equal((await call('/v1/machines/'+id,'PUT',{server:spec.server,...domain,policy:selected})).status,200)
+    const detail=await store.machine(id)
+    assert.equal(detail.version,1);assert.deepEqual(detail.policy.protocols,[protocol])
+    const config=JSON.parse((await store.getConfig('server',id,'linux'))!.toString())
+    assert.deepEqual(config.inbounds.map((i:any)=>i.type),[protocol])
+    assert.equal(Boolean(config.certificate_providers),protocol!=='vless')
+    const client=JSON.parse((await store.getConfig('client',id,'linux'))!.toString())
+    assert.deepEqual(client.outbounds.filter((o:any)=>o.type!=='direct'&&o.type!=='selector').map((o:any)=>o.type),[protocol])
+    assert.equal((await call('/v1/machines/'+id,'PUT',{...spec,policy:defaultPolicy()})).status,409)
+    assert.equal((await store.machine(id)).version,1)
+    assert.equal((await call('/v1/machines/'+id+'/draft','PUT',{baseVersion:1,spec:{server:spec.server,...domain},policy:selected})).status,200)
+    assert.equal((await call('/v1/machines/'+id+'/draft','PUT',{baseVersion:1,spec:{server:spec.server,...domain},policy:defaultPolicy()})).status,400)
+    assert.equal((await call('/v1/machines/missing-'+protocol,'PUT',{server:spec.server,policy:selected})).status,400)
+  }
+})
