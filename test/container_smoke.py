@@ -123,16 +123,22 @@ try:
         docker('volume', 'create', '--label', 'io.nokiy.managed-proxy.id=container-test', volume)
         docker('run', '--rm', '-i', *options, *env, *mounts, 'sing-box-agent:test', 'enroll', input=(code + '\n').encode())
         print('Hidden-input enrollment and volume persistence PASS', flush=True)
-        desired(1, port1)
+        desired(1, port1, enabled=False)
         docker('run', '-d', '--name', name, *options, *env, *mounts, 'sing-box-agent:test')
-        eventually(lambda: reported(1, 'applied', 1) and socks_alive(port1))
-        print('Real sing-box initial configuration and status PASS', flush=True)
-        desired(2, port2)
-        eventually(lambda: reported(2, 'applied', 2) and socks_alive(port2))
-        print('Published listener-port change without Compose change PASS', flush=True)
-        desired(3, port1, invalid=True)
+        eventually(lambda: reported(1, 'stopped', 0))
+        assert docker('ps', '-a', '--filter', 'name=^/nokiy-sing-box-container-test$', '--format', '{{.ID}}') == b''
+        docker('exec', name, 'python3', '/app/container.py', 'health')
+        print('Agent enrolls and stays healthy without a proxy or listener PASS', flush=True)
+        desired(2, port1)
         docker('kill', '--signal', 'HUP', name)
-        eventually(lambda: reported(3, 'failed_validation', 2) and socks_alive(port2))
+        eventually(lambda: reported(2, 'applied', 2) and socks_alive(port1))
+        print('Real sing-box initial configuration and status PASS', flush=True)
+        desired(3, port2)
+        eventually(lambda: reported(3, 'applied', 3) and socks_alive(port2))
+        print('Published listener-port change without Compose change PASS', flush=True)
+        desired(4, port1, invalid=True)
+        docker('kill', '--signal', 'HUP', name)
+        eventually(lambda: reported(4, 'failed_validation', 3) and socks_alive(port2))
         print('Invalid desired configuration retains running version PASS', flush=True)
         # Bind in the Docker host's network namespace, not the CLI host's.
         docker('run', '-d', '--name', name+'-blocker', '--network', 'host',
@@ -141,10 +147,10 @@ try:
                str(blocked_port), '--bind', '127.0.0.1')
         eventually(lambda: docker('exec', name+'-blocker', 'python3', '-c',
             'import socket; socket.create_connection(("127.0.0.1",'+str(blocked_port)+'),1).close()') == b'')
-        desired(4, blocked_port)
+        desired(5, blocked_port)
         docker('kill', '--signal', 'HUP', name)
         try:
-            eventually(lambda: reported(4, 'failed_start', 2) and socks_alive(port2))
+            eventually(lambda: reported(5, 'failed_start', 3) and socks_alive(port2))
         except RuntimeError:
             # Only listener-port metadata from the credential-free synthetic fixture.
             print('Synthetic intended port:', blocked_port, flush=True)
@@ -153,13 +159,13 @@ try:
             raise
         docker('rm', '-f', name+'-blocker')
         print('Real startup failure restores last good configuration PASS', flush=True)
-        desired(5, port2, enabled=False)
+        desired(6, port2, enabled=False)
         docker('kill', '--signal', 'HUP', name)
-        eventually(lambda: reported(5, 'stopped', 0))
+        eventually(lambda: reported(6, 'stopped', 0))
         docker('exec', name, 'python3', '/app/container.py', 'health')
-        desired(6, port2)
+        desired(7, port2)
         docker('kill', '--signal', 'HUP', name)
-        eventually(lambda: reported(6, 'applied', 6) and socks_alive(port2))
+        eventually(lambda: reported(7, 'applied', 7) and socks_alive(port2))
         print('Disable, health check and re-enable PASS', flush=True)
         # Metadata-only child PID; no credential/configuration inspection.
         docker('kill', 'nokiy-sing-box-container-test')
@@ -177,9 +183,9 @@ try:
         eventually(lambda: docker('exec', name, 'python3', '/app/container.py', 'health') == b'')
         print('Agent restart restores cached proxy with control plane offline PASS', flush=True)
         state['offline'] = False
-        desired(7, port2)
+        desired(8, port2)
         docker('kill', '--signal', 'HUP', name)
-        eventually(lambda: reported(7, 'applied', 7))
+        eventually(lambda: reported(8, 'applied', 8))
         print('Identical configuration advances reported version via HTTP 304 PASS', flush=True)
         # No token, enrollment code or proxy document may escape through logs.
         logs = docker('logs', name)

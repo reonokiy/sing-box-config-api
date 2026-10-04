@@ -163,8 +163,8 @@ key and its Pocket ID group. The page manages independent server addresses,
 TLS/Reality names, enabled protocols and ports, proxy users, log level, DNS and
 routing. Credential material is excluded from machine lists, drafts and history.
 
-1. Add a server, then edit and save its draft. Saving does not change the active
-   configuration. Publish explicitly; stale editors receive HTTP 409.
+1. Add a machine with only its ID (server address is optional). It starts disabled
+   with no protocols or proxy listeners. You can enroll the Agent immediately.
 2. Install Docker with Compose on the Linux proxy and generate a one-time
    enrollment code. It expires after ten minutes and can be redeemed once.
 3. Download the deployment and enroll (these arguments contain no credentials):
@@ -234,6 +234,8 @@ Management routes (all relative to `/sing-box/`):
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| POST | `v1/machines/{id}/register` | Add an unconfigured machine; optional `{server}` |
+| POST | `v1/machines/{id}/users/{user}/rotate` | Rotate that user's proxy credentials and publish; `{baseVersion}` |
 | GET | `v1/machines` / `v1/machines/{id}` | Safe list and detail/status |
 | PUT | `v1/machines/{id}/draft` | `{baseVersion,spec,policy}` |
 | POST | `v1/machines/{id}/publish` | `{baseVersion}` |
@@ -253,3 +255,21 @@ Use the draft API/UI for reviewed changes. Published versions are immutable;
 rollback appends a new version rather than overwriting history.
 
 The previous native Python/systemd bootstrap remains available for existing nodes; new UI enrollments use Docker. Agent image and API image are built for linux/amd64 and linux/arm64 from the same revision. Compose downloads contain only a validated machine ID and public image/control-service metadata, not machine configuration.
+
+
+### Configure an enrolled machine later
+
+Choose protocols and TCP/UDP listener ports in the panel, set the server address
+and applicable TLS certificate or Reality handshake domain, and select proxy
+users. Enable the service, save the draft, then publish. The enrolled Agent
+checks and applies the published configuration automatically. Required ports
+are shown in the panel; host and cloud firewall rules remain operator-owned.
+TLS-based protocols also need TCP 80 for HTTP-01 certificate issuance.
+
+Passwords and UUIDs are generated independently per machine and proxy user.
+Client downloads use the matching credentials automatically. A user's rotation
+publishes a new version without changing other users, the machine's Reality
+identity or its Agent token. Old client profiles stop authenticating once the
+Agent applies that version; download fresh profiles afterward. Configuration
+rollback retains the latest credentials and never revives a rotated key.
+Credential material is excluded from management responses and history.

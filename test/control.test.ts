@@ -4,7 +4,7 @@ import postgres from 'postgres'
 import { before, after, test } from 'node:test'
 import { PostgresStore } from '../src/store.ts'
 import { createApp } from '../src/app.ts'
-import { defaultPolicy } from '../src/policy.ts'
+import { defaultPolicy, requiredPorts, parsePolicy } from '../src/policy.ts'
 let store: PostgresStore, app: ReturnType<typeof createApp>, sql: ReturnType<typeof postgres>, control: ReturnType<typeof postgres>, database: string
 const spec = {server:'edge.example.com',tlsServerName:'edge.example.com',realityServerName:'www.example.org'}
 before(async()=>{
@@ -134,4 +134,69 @@ test('initial protocol selection is atomic and requires only the applicable doma
     assert.equal((await call('/v1/machines/'+id+'/draft','PUT',{baseVersion:1,spec:{server:spec.server,...domain},policy:defaultPolicy()})).status,400)
     assert.equal((await call('/v1/machines/missing-'+protocol,'PUT',{server:spec.server,policy:selected})).status,400)
   }
+})
+
+
+test('machine-first registration enrolls without a proxy; later publication enables listeners', async()=>{
+  assert.equal((await call('/v1/machines/empty-machine/register','POST',{})).status,200)
+  const detail=await store.machine('empty-machine')
+  assert.deepEqual(detail.requiredPorts,[]);assert.equal(detail.version,1);assert.equal(detail.spec.server,'');assert.equal(detail.policy.enabled,false);assert.deepEqual(detail.policy.protocols,[])
+  const {token}=await enroll('empty-machine')
+  const desired=await (await call('/v1/agent/empty-machine/config','GET',undefined,token)).json() as any
+  assert.equal(desired.enabled,false);assert.deepEqual(desired.config.inbounds,[]);assert.equal(desired.config.certificate_providers,undefined)
+  assert.equal((await call('/v1/agent/empty-machine/status','POST',{version:1,runningVersion:0,status:'stopped'},token)).status,200)
+  assert.equal((await call('/v1/machines/empty-machine/register','POST',{})).status,409)
+  assert.equal((await store.machine('empty-machine')).version,1)
+  for(const body of [{policy:defaultPolicy()},{server:'bad/address'},[],null])assert.equal((await call('/v1/machines/invalid-registration/register','POST',body)).status,400)
+  assert.equal((await call('/v1/machines/empty-machine/register','POST',{},token)).status,403)
+  assert.equal((await app.request('/v1/machines/empty-machine/register',{method:'POST',headers:{Origin:'https://untrusted.example.com','Content-Type':'application/json'},body:'{}'})).status,403)
+  const policy={...defaultPolicy(),protocols:['vless'],ports:{...defaultPolicy().ports,vless:9443}}
+  assert.equal((await call('/v1/machines/empty-machine/draft','PUT',{baseVersion:1,spec:{},policy})).status,400)
+  assert.equal((await call('/v1/machines/empty-machine/draft','PUT',{baseVersion:1,spec:{server:'192.0.2.1',realityServerName:'www.example.org'},policy})).status,200)
+  assert.equal((await store.desired('empty-machine')).enabled,false)
+  assert.equal((await call('/v1/machines/empty-machine/publish','POST',{baseVersion:1})).status,200)
+  const active=await store.desired('empty-machine')
+  assert.equal(active.enabled,true);assert.equal(active.config.inbounds[0].listen_port,9443)
+  assert.equal((await call('/v1/machines/empty-machine/rollback','POST',{baseVersion:2,version:1})).status,200)
+  assert.equal((await store.desired('empty-machine')).enabled,false)
+})
+test('credential rotation is user-scoped, atomic, survives rollback and preserves node and Reality identity',async()=>{
+  await register('rotation')
+  const policy={...defaultPolicy(),users:['default','alice','bob']}
+  await store.stage('rotation',spec,policy,1);await store.publish('rotation',1)
+  const {token}=await enroll('rotation')
+  const config=async(user:string)=>JSON.parse((await store.getConfig('client','rotation','linux',user))!.toString())
+  const beforeAlice=await config('alice'),beforeBob=await config('bob'),beforeDefault=await config('default')
+  assert.equal((await call('/v1/machines/rotation/users/alice/rotate','POST',{baseVersion:2},token)).status,403)
+  assert.equal((await call('/v1/machines/rotation/users/unknown/rotate','POST',{baseVersion:2})).status,404)
+  assert.equal((await call('/v1/machines/rotation/users/alice/rotate','POST',{baseVersion:2,unknown:true})).status,400)
+  const results=await Promise.all([call('/v1/machines/rotation/users/alice/rotate','POST',{baseVersion:2}),call('/v1/machines/rotation/users/alice/rotate','POST',{baseVersion:2})])
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,409])
+  const afterAlice=await config('alice')
+  for(const profile of [beforeAlice,beforeBob,afterAlice])assert.ok(JSON.stringify(profile.outbounds.find((o:any)=>o.type==='vless').tls.reality)===JSON.stringify(beforeDefault.outbounds.find((o:any)=>o.type==='vless').tls.reality))
+  assert.ok(JSON.stringify(beforeBob)===JSON.stringify(await config('bob')))
+  assert.ok(JSON.stringify(beforeDefault)===JSON.stringify(await config('default')))
+  for(const type of ['anytls','vless','tuic','hysteria2']){
+    const old=beforeAlice.outbounds.find((o:any)=>o.type===type),fresh=afterAlice.outbounds.find((o:any)=>o.type===type)
+    assert.ok(JSON.stringify(old)!==JSON.stringify(fresh))
+    const server=JSON.parse((await store.getConfig('server','rotation','linux'))!.toString()).inbounds.find((i:any)=>i.type===type).users.find((u:any)=>u.name==='alice')
+    assert.ok(server.password===fresh.password && server.uuid===fresh.uuid)
+  }
+  assert.equal(await store.publish('rotation',3,2),200)
+  assert.ok(JSON.stringify(afterAlice)===JSON.stringify(await config('alice')))
+  assert.equal((await call('/v1/machines/rotation/users/default/rotate','POST',{baseVersion:4})).status,200)
+  const afterDefault=await config('default')
+  assert.ok(JSON.stringify(beforeDefault.outbounds.find((o:any)=>o.type==='vless').tls)===JSON.stringify(afterDefault.outbounds.find((o:any)=>o.type==='vless').tls))
+  assert.ok(JSON.stringify(beforeDefault)!==JSON.stringify(afterDefault))
+  assert.ok(JSON.stringify(afterAlice)===JSON.stringify(await config('alice')))
+  assert.equal((await call('/v1/agent/rotation/config','GET',undefined,token)).status,200)
+  const metadata=JSON.stringify(await store.machine('rotation'))
+  assert.equal(/Password|private_key|vlessUUID|realityPrivateKey/.test(metadata),false)
+})
+test('required ports distinguish TCP, UDP and ACME and reject enabled empty or conflicting listeners',()=>{
+  assert.deepEqual(requiredPorts(parsePolicy({enabled:false,protocols:[]})),[])
+  assert.deepEqual(requiredPorts(parsePolicy({protocols:['vless']})),[{transport:'TCP',port:8443}])
+  assert.deepEqual(requiredPorts(parsePolicy({protocols:['anytls','tuic','hysteria2']})),[{transport:'TCP',port:80},{transport:'TCP',port:443},{transport:'UDP',port:443},{transport:'UDP',port:8443}])
+  assert.throws(()=>parsePolicy({enabled:true,protocols:[]}),TypeError)
+  assert.throws(()=>parsePolicy({protocols:['anytls'],ports:{...defaultPolicy().ports,anytls:80}}),TypeError)
 })

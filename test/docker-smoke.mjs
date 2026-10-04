@@ -18,6 +18,14 @@ const runtimeName = 'registry-tailnet-smoke-' + Date.now()
 const fixtures = await mkdtemp(join(tmpdir(), 'registry-docker-smoke-'))
 try {
   await ready(base + '/readyz')
+  assert.equal((await fetch(base+'/v1/machines/empty-machine/register',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,200)
+  for(const role of ['server','client'])for(const platform of role==='server'?['linux']:['linux','macos']){
+    const config=await (await fetch(base+'/v1/config/'+role+'/empty-machine/'+platform)).json()
+    const file='unconfigured-'+role+'-'+platform+'.json'
+    await writeFile(join(fixtures,file),JSON.stringify(config))
+    docker('run','--rm','--network','none','-v',fixtures+':/fixtures:ro','ghcr.io/sagernet/sing-box:v1.14.0-beta.1','check','-D','/tmp','-c','/fixtures/'+file)
+  }
+  console.log('Unconfigured machine with no address, certificate or protocols: official syntax checks PASS')
   const clientRequestUrl = base + '/v1/clients/personal-macos'
   const clientRegistration = await fetch(clientRequestUrl, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"platform":"macos"}' })
   assert.equal(clientRegistration.status, 200)

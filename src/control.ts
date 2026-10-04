@@ -3,7 +3,7 @@ import { proxyCompose } from './compose.ts'
 import { createHash, randomBytes } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { parseSpec } from './generate.ts'
-import { parsePolicy, defaultPolicy } from './policy.ts'
+import { parsePolicy, defaultPolicy, unconfiguredPolicy } from './policy.ts'
 import { validSlug, type PostgresStore } from './store.ts'
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -54,7 +54,7 @@ export function controlRoutes(store: PostgresStore): Hono {
   })
   // Exact JSON content type and bounded reads also prevent browser form-based CSRF.
   app.use('/v1/*',async(c,next) => {
-    if (!['GET','HEAD'].includes(c.req.method) && /(?:\/(?:draft|publish|rollback|enrollment|revoke)|\/agent\/[^/]+\/(?:enroll|status))$/.test(c.req.path)) {
+    if (!['GET','HEAD'].includes(c.req.method) && /(?:\/(?:draft|publish|rollback|enrollment|revoke|register|rotate)|\/agent\/[^/]+\/(?:enroll|status))$/.test(c.req.path)) {
       if (!(c.req.header('Content-Type') ?? '').toLowerCase().startsWith('application/json')) return c.text('Expected application/json',415)
       const reader = c.req.raw.body?.getReader()
       let size = 0
@@ -70,13 +70,22 @@ export function controlRoutes(store: PostgresStore): Hono {
   })
   const body = (c: any): any => c.get('body')
   const respond = (c: any,status: number) => status === 200 ? c.json({ok:true}) : c.text(status === 409 ? 'Version conflict' : 'Not found',status)
+  app.post('/v1/machines/:id/register',async c => {
+    const id = c.req.param('id'), b = body(c)
+    if (!validSlug(id)) return c.notFound()
+    if (!b || typeof b !== 'object' || Array.isArray(b) || Object.keys(b).some(k => k !== 'server')) return c.text('Invalid machine',400)
+    try {
+      const spec = parseSpec(b,[])
+      return await store.saveMachine(id,spec,unconfiguredPolicy()) ? c.json({id}) : c.text('Machine already exists',409)
+    } catch(e) { if(e instanceof Error && e.message === 'invalid machine spec') return c.text('Invalid machine',400); throw e }
+  })
   app.put('/v1/machines/:id/draft',async c => {
     if (!validSlug(c.req.param('id') ?? '')) return c.notFound()
     try {
       const b = body(c)
       if (!b || !Number.isInteger(b.baseVersion) || b.baseVersion < 1) return c.text('Invalid draft',400)
       const policy = parsePolicy(b.policy)
-      return respond(c,await store.stage(c.req.param('id'),parseSpec(b.spec,policy.protocols),policy,b.baseVersion))
+      return respond(c,await store.stage(c.req.param('id'),parseSpec(b.spec,policy.enabled ? policy.protocols : []),policy,b.baseVersion))
     } catch(e) { if (e instanceof TypeError || (e instanceof Error && e.message === 'invalid machine spec')) return c.text('Invalid draft',400); throw e }
   })
   for (const action of ['publish','rollback']) app.post('/v1/machines/:id/'+action,async c => {
@@ -84,6 +93,12 @@ export function controlRoutes(store: PostgresStore): Hono {
     if (!validSlug(c.req.param('id') ?? '')) return c.notFound()
     if (!b || !Number.isInteger(b.baseVersion) || b.baseVersion < 1 || action === 'rollback' && (!Number.isInteger(b.version) || b.version < 1)) return c.text('Invalid version',400)
     return respond(c,await store.publish(c.req.param('id')!,b.baseVersion,action === 'rollback' ? b.version : undefined))
+  })
+  app.post('/v1/machines/:id/users/:user/rotate',async c => {
+    const b = body(c), id = c.req.param('id'), user = c.req.param('user')
+    if (!validSlug(id) || !validSlug(user)) return c.notFound()
+    if (!b || !Number.isInteger(b.baseVersion) || b.baseVersion < 1 || Object.keys(b).some(k => k !== 'baseVersion')) return c.text('Invalid rotation',400)
+    return respond(c,await store.rotateUser(id,user,b.baseVersion))
   })
   app.post('/v1/machines/:id/enrollment',async c => {
     if (!validSlug(c.req.param('id') ?? '')) return c.notFound()

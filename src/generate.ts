@@ -29,7 +29,8 @@ export function parseSpec(value: unknown, protocols: readonly string[] = ['anytl
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('invalid machine spec')
   const spec = value as Record<string, unknown>
   const validDomain = (value: unknown, required: boolean) => (!required && (value === undefined || value === '')) || typeof value === 'string' && domain.test(value)
-  if (typeof spec.server !== 'string' || !address.test(spec.server) || spec.server.includes('..') ||
+  const server = spec.server === undefined ? '' : spec.server
+  if (typeof server !== 'string' || ((protocols.length > 0 || server !== '') && (!address.test(server) || server.includes('..'))) ||
       !validDomain(spec.tlsServerName, protocols.some(p => p !== 'vless')) ||
       !validDomain(spec.realityServerName, protocols.includes('vless')) ||
       (spec.acmeEmail !== undefined && (typeof spec.acmeEmail !== 'string' ||
@@ -37,7 +38,7 @@ export function parseSpec(value: unknown, protocols: readonly string[] = ['anytl
     throw new Error('invalid machine spec')
   }
   return {
-    server: spec.server,
+    server: server as string,
     tlsServerName: (spec.tlsServerName ?? '') as string,
     realityServerName: (spec.realityServerName ?? '') as string,
     ...(spec.acmeEmail === undefined ? {} : { acmeEmail: spec.acmeEmail as string }),

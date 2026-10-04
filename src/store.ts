@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import postgres from 'postgres'
 import { newCredentials, type Credentials, type MachineSpec, type Platform, type Role } from './generate.ts'
 
-import { defaultPolicy, parsePolicy, managedServer, managedClient, type Policy } from './policy.ts'
+import { defaultPolicy, parsePolicy, requiredPorts, managedServer, managedClient, type Policy } from './policy.ts'
 
 export { type Platform, type Role }
 export function validSlug(value: string): boolean {
@@ -146,7 +146,7 @@ export class PostgresStore {
       if (!policy.users.includes(user)) return null
       const users = new Map<string, Credentials>([['default', this.credentials(row)]])
       for (const extra of await sql`SELECT name,credentials FROM machine_users WHERE machine_id=${id}`) users.set(extra.name,extra.credentials)
-      const config = role === 'server' ? managedServer(id,this.spec(row),users,policy) : managedClient(id,this.spec(row),users.get(user)!,platform,policy,this.macos)
+      const config = role === 'server' ? managedServer(id,this.spec(row),users,policy) : managedClient(id,this.spec(row),{...users.get(user)!,realityPublicKey:users.get('default')!.realityPublicKey,realityShortID:users.get('default')!.realityShortID},platform,policy,this.macos)
       return Buffer.from(JSON.stringify(config,null,2) + '\n')
     })
   }
@@ -158,7 +158,7 @@ export class PostgresStore {
     if (!row) return null
     const [draft] = await this.sql`SELECT base_version,spec,policy FROM machine_drafts WHERE machine_id=${id}`
     const versions = await this.sql`SELECT version,created_at FROM machine_versions WHERE machine_id=${id} ORDER BY version DESC LIMIT 100`
-    return { id, spec: this.spec(row), policy: parsePolicy(row.policy), version: row.version, enrolled: row.enrolled,
+    return { id, spec: this.spec(row), policy: parsePolicy(row.policy), requiredPorts: requiredPorts(parsePolicy(row.policy)), version: row.version, enrolled: row.enrolled,
       lastSeen: row.last_seen, reportedVersion: row.reported_running_version, attemptedVersion: row.reported_version, reportedStatus: row.reported_status, reportedAt: row.reported_at, draft: draft ?? null, versions }
   }
   async stage(id: string, spec: MachineSpec, policy: Policy, baseVersion: number): Promise<number> {
@@ -187,6 +187,25 @@ export class PostgresStore {
       await sql`UPDATE machines SET server=${spec.server},tls_server_name=${spec.tlsServerName},reality_server_name=${spec.realityServerName},acme_email=${spec.acmeEmail ?? ''},policy=${sql.json(JSON.parse(JSON.stringify(policy)))},version=version+1,updated_at=now() WHERE id=${id}`
       await sql`INSERT INTO machine_versions(machine_id,version,spec,policy) VALUES (${id},${baseVersion+1},${sql.json(spec)},${sql.json(JSON.parse(JSON.stringify(policy)))})`
       await sql`DELETE FROM machine_drafts WHERE machine_id=${id}`
+      return 200
+    })
+  }
+  async rotateUser(id: string, user: string, baseVersion: number): Promise<number> {
+    return this.sql.begin(async sql => {
+      const [row] = await sql`SELECT id,version,server,tls_server_name,reality_server_name,acme_email,policy FROM machines WHERE id=${id} FOR UPDATE`
+      if (!row) return 404
+      if (row.version !== baseVersion) return 409
+      const policy = parsePolicy(row.policy)
+      if (!policy.users.includes(user)) return 404
+      const next = newCredentials()
+      if (user === 'default') {
+        // Reality identity belongs to the machine, not to an individual user.
+        await sql`UPDATE machines SET anytls_password=${next.anytlsPassword},vless_uuid=${next.vlessUUID},tuic_uuid=${next.tuicUUID},tuic_password=${next.tuicPassword},hysteria2_password=${next.hysteria2Password} WHERE id=${id}`
+      } else {
+        await sql`INSERT INTO machine_users(machine_id,name,credentials) VALUES (${id},${user},${sql.json(next)}) ON CONFLICT(machine_id,name) DO UPDATE SET credentials=EXCLUDED.credentials`
+      }
+      await sql`UPDATE machines SET version=version+1,updated_at=now() WHERE id=${id}`
+      await sql`INSERT INTO machine_versions(machine_id,version,spec,policy) VALUES (${id},${baseVersion+1},${sql.json(this.spec(row))},${row.policy})`
       return 200
     })
   }
