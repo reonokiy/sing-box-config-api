@@ -1,3 +1,4 @@
+import { controlRoutes } from './control.ts'
 import { Hono } from 'hono'
 import { parseSpec } from './generate.ts'
 import { etag, validSlug, type PostgresStore, type Platform, type Role } from './store.ts'
@@ -47,13 +48,14 @@ function baseApp(): Hono {
     c.header('Referrer-Policy', 'no-referrer')
   })
   app.get('/healthz', (c) => c.text('ok'))
-  app.get('/', (c) => c.json({ service: 'sing-box registry', register: 'PUT v1/machines/{id}', config: 'GET v1/config/{server|client}/{id}/{linux|macos}', registerClient: 'PUT v1/clients/{id}', clientConfig: 'GET v1/clients/{id}/config' }))
+  app.get('/', (c) => c.json({ service: 'sing-box registry', manage: 'GET manage/', register: 'PUT v1/machines/{id}', config: 'GET v1/config/{server|client}/{id}/{linux|macos}', registerClient: 'PUT v1/clients/{id}', clientConfig: 'GET v1/clients/{id}/config' }))
   return app
 }
 
 export function createApp(settings: Settings): Hono {
   const app = baseApp()
   app.onError((_error, c) => c.text('Internal Server Error', 500))
+  app.route('/',controlRoutes(settings.store))
   app.get('/readyz', async (c) => {
     try { await settings.store.ready(); return c.text('ok') }
     catch { return c.text('Database unavailable', 503) }
@@ -93,7 +95,9 @@ export function createApp(settings: Settings): Hono {
   app.get('/v1/config/:role/:id/:platform', async (c) => {
     const { role, id, platform } = c.req.param()
     if (!target(role, id, platform)) return c.notFound()
-    const data = await settings.store.getConfig(role, id, platform as Platform)
+    const user = c.req.query('user') ?? 'default'
+    if (!validSlug(user)) return c.notFound()
+    const data = await settings.store.getConfig(role, id, platform as Platform, user)
     if (data === null) return c.notFound()
     const hash = etag(data)
     c.header('ETag', hash)

@@ -3,3 +3,6 @@ data/
 .env
 *.log
 *.json.tmp
+
+__pycache__/
+*.pyc
