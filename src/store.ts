@@ -1,4 +1,4 @@
-import { type MacosSettings } from './macos.ts'
+import { macosClientProfile, type MacosSettings } from './macos.ts'
 import { createHash } from 'node:crypto'
 import postgres from 'postgres'
 import { clientConfig, newCredentials, serverConfig, type Credentials, type MachineSpec, type Platform, type Role } from './generate.ts'
@@ -50,11 +50,30 @@ export class PostgresStore {
       await sql`ALTER TABLE machines ALTER COLUMN certificate_path DROP NOT NULL,
         ALTER COLUMN key_path DROP NOT NULL,
         ADD COLUMN IF NOT EXISTS acme_email text NOT NULL DEFAULT ''`
+      await sql`CREATE TABLE IF NOT EXISTS client_machines (
+        id text PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+        platform text NOT NULL CHECK (platform = 'macos'),
+        created_at timestamptz NOT NULL DEFAULT now()
+      )`
     })
   }
 
   async ready(): Promise<void> { await this.sql`SELECT 1` }
   async close(): Promise<void> { await this.sql.end({ timeout: 5 }) }
+
+  async saveClient(id: string): Promise<boolean> {
+    if (!validSlug(id)) throw new Error('invalid id')
+    if (!this.macos?.headscaleUrl) return false
+    await this.sql`INSERT INTO client_machines (id,platform) VALUES (${id},'macos') ON CONFLICT (id) DO NOTHING`
+    return true
+  }
+
+  async getClientConfig(id: string): Promise<Buffer | null> {
+    if (!this.macos?.headscaleUrl) return null
+    const [row] = await this.sql`SELECT id FROM client_machines WHERE id=${id}`
+    if (!row) return null
+    return Buffer.from(`${JSON.stringify(macosClientProfile(row.id, this.macos), null, 2)}\n`)
+  }
 
   async saveMachine(id: string, spec: MachineSpec): Promise<void> {
     if (!validSlug(id)) throw new Error('invalid id')

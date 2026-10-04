@@ -29,6 +29,10 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run check
+      - run: docker compose -p registry-test -f compose.test.yaml up -d --build
+      - run: node test/docker-smoke.mjs
+      - if: always()
+        run: docker compose -p registry-test -f compose.test.yaml down --volumes
 
   image:
     if: github.event_name == 'push'

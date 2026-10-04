@@ -136,3 +136,20 @@ No base-path setting or forwarded-prefix header is needed by the application.
 For example, the gateway can map `/registry/v1/machines/edge-a` to
 `/v1/machines/edge-a`. Canonicalize the mount root to a trailing slash at the
 gateway so the discovery document's relative paths resolve correctly.
+
+## Register a personal macOS client
+
+`PUT /v1/clients/macos` with `Content-Type: application/json` and
+`{"platform":"macos"}` registers a personal client independently of proxy servers.
+Download its profile from `GET /v1/clients/macos/config` (the returned link is
+relative to the registration URL). Repeated registration is idempotent.
+`HEADSCALE_URL` must be configured; registration returns 503 otherwise.
+
+The profile uses the existing Headscale control server and domain settings,
+macOS TUN with the mixed stack, and direct Internet access. It needs no proxy
+server, remote rule downloads, pre-auth key, or transport credentials. Its
+hostname is the registered client ID and its state directory is independent
+of other clients. Starting it on the Mac and completing the Headscale/Pocket ID
+login joins the actual device; saving a client record does not enroll a node
+or change the Tailnet ACL. This endpoint is protected by the same deployment
+boundary as the rest of the registry.

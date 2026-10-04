@@ -35,6 +35,52 @@ const aiDomains = ['ai.com', 'anthropic.com', 'auth0.openai.com', 'chat.com', 'c
 const directSets = ['geosite-apple', 'geosite-cn', 'direct-extra']
 type JsonObject = Record<string, unknown>
 
+// Personal clients join Headscale using interactive OIDC on their own device.
+// They do not create a proxy server or require its transport credentials.
+export function macosClientProfile(id: string, settings: MacosSettings): object {
+  if (!settings.headscaleUrl) throw new Error('Headscale is not configured')
+  const networks = [
+    { domains: settings.headscaleDomains, dns: 'dns-headscale' },
+    { domains: settings.headscalePublicDomains, dns: 'bootstrap' },
+  ].filter(n => n.domains.length)
+  const dnsRules: JsonObject[] = [{ domain_suffix: ['localhost', 'local'], action: 'route', server: 'local' }]
+  const routeRules: JsonObject[] = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }]
+  for (const network of networks) {
+    dnsRules.push(
+      { domain_suffix: network.domains, query_type: ['A', 'AAAA'], action: 'route', server: 'tailnet-fakeip' },
+      { domain_suffix: network.domains, action: 'route', server: network.dns },
+    )
+    routeRules.push(
+      { domain_suffix: network.domains, action: 'resolve', server: network.dns },
+      { domain_suffix: network.domains, action: 'route', outbound: 'Headscale' },
+    )
+  }
+  routeRules.push(
+    { ip_cidr: ['100.64.0.0/10', 'fd7a:115c:a1e0::/48'], action: 'route', outbound: 'Headscale' },
+    { preferred_by: ['Headscale'], action: 'route', outbound: 'Headscale' },
+  )
+  return {
+    log: { level: 'info', timestamp: true },
+    inbounds: [{ type: 'tun', tag: 'tun-in', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+      auto_route: true, dns_mode: 'hijack', stack: 'mixed' }],
+    endpoints: [{ type: 'tailscale', tag: 'Headscale', hostname: id,
+      control_url: settings.headscaleUrl, state_directory: `tailscale-headscale-${id}`,
+      domain_resolver: 'bootstrap', accept_routes: true }],
+    outbounds: [{ type: 'direct', tag: 'DIRECT' }],
+    dns: {
+      servers: [
+        { type: 'local', tag: 'local' },
+        { type: 'udp', tag: 'bootstrap', server: '223.5.5.5' },
+        { type: 'tailscale', tag: 'dns-headscale', endpoint: 'Headscale', accept_search_domain: false },
+        { type: 'fakeip', tag: 'tailnet-fakeip', inet4_range: '198.18.0.0/15', inet6_range: 'fc00::/18' },
+      ],
+      rules: dnsRules, final: 'bootstrap', strategy: 'prefer_ipv4',
+    },
+    route: { auto_detect_interface: true, default_domain_resolver: 'bootstrap', rules: routeRules, final: 'DIRECT' },
+    experimental: { cache_file: { enabled: true, cache_id: `${id}-macos`, store_fakeip: true } },
+  }
+}
+
 export function macosProfile(base: JsonObject & { outbounds: JsonObject[] }, settings: MacosSettings): object {
   const endpoints: JsonObject[] = [{
     type: 'tailscale', tag: 'Tailscale', state_directory: 'tailscale-official',

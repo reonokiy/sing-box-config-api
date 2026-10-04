@@ -151,3 +151,56 @@ test('migrates legacy path columns without changing machine credentials', async 
     assert.equal(config.certificate_providers[0].email, 'ops@example.com')
   } finally { await sql.end() }
 })
+
+test('personal macOS registration creates only a client and persists its Headscale profile', async () => {
+  const url = new URL(process.env.TEST_DATABASE_URL!); url.pathname = '/' + database
+  const settings = { headscaleUrl: 'https://hs.example.com', headscaleDomains: ['tailnet'], headscalePublicDomains: ['internal.example.com'] }
+  const clientStore = new PostgresStore(url.toString(), settings)
+  const app = createApp({ store: clientStore })
+  const request = (id: string, body: unknown = { platform: 'macos' }) => app.request(`/v1/clients/${id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  try {
+    assert.equal((await app.request('/v1/clients/personal-macos/config')).status, 404)
+    const registered = await request('personal-macos')
+    assert.equal(registered.status, 200)
+    const link = (await registered.json() as any).config
+    assert.equal(new URL(link, 'https://api.example.com/sing-box/v1/clients/personal-macos').pathname, '/sing-box/v1/clients/personal-macos/config')
+    const response = await app.request('/v1/clients/personal-macos/config')
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('Cache-Control'), 'no-store')
+    const profile = await response.json() as any
+    assert.equal(profile.endpoints.length, 1)
+    assert.equal(profile.endpoints[0].hostname, 'personal-macos')
+    assert.equal(profile.endpoints[0].control_url, settings.headscaleUrl)
+    assert.equal(profile.endpoints[0].auth_key, undefined)
+    assert.deepEqual(profile.outbounds, [{ type: 'direct', tag: 'DIRECT' }])
+    assert.equal(profile.inbounds[0].type, 'tun')
+    assert.equal(profile.inbounds[0].stack, 'mixed')
+    assert.equal(profile.route.final, 'DIRECT')
+    for (const [domain, resolver] of [['tailnet', 'dns-headscale'], ['internal.example.com', 'bootstrap']]) {
+      assert.ok(profile.dns.rules.some((r: any) => r.domain_suffix?.includes(domain) && r.server === 'tailnet-fakeip'))
+      const index = profile.route.rules.findIndex((r: any) => r.domain_suffix?.includes(domain) && r.action === 'resolve')
+      assert.equal(profile.route.rules[index].server, resolver)
+      assert.equal(profile.route.rules[index + 1].outbound, 'Headscale')
+    }
+    assert.equal(profile.route.rules.find((r: any) => r.preferred_by).outbound, 'Headscale')
+    assert.equal((await app.request('/v1/config/server/personal-macos/linux')).status, 404)
+    assert.equal((await app.request('/v1/clients/personal-macos/config', { headers: { 'If-None-Match': response.headers.get('etag')! } })).status, 304)
+    await Promise.all(Array.from({ length: 8 }, () => request('personal-macos')))
+    const reconnected = new PostgresStore(url.toString(), settings)
+    try { assert.deepEqual(JSON.parse((await reconnected.getClientConfig('personal-macos'))!.toString()), profile) }
+    finally { await reconnected.close() }
+    for (const body of [{ platform: 'linux' }, {}, { platform: 'macos', server: 'unwanted.example.com' }, [], null]) {
+      assert.equal((await request('bad-client', body)).status, 400)
+    }
+    assert.equal((await request('Bad-ID')).status, 404)
+    assert.equal((await app.request('/v1/clients/client', { method: 'PUT' })).status, 415)
+    assert.equal((await request('large', { platform: 'macos', extra: 'x'.repeat(17000) })).status, 413)
+    assert.equal((await app.request('/v1/clients/Bad-ID/config')).status, 404)
+    assert.equal((await app.request('/v1/clients/bad-client/config')).status, 404)
+    const notConfigured = await admin.request('/v1/clients/no-control', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"platform":"macos"}' })
+    assert.equal(notConfigured.status, 503)
+    assert.equal(await store.getClientConfig('personal-macos'), null)
+  } finally { await clientStore.close() }
+})
