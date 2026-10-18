@@ -1,3 +1,4 @@
+import { publisherFromEnvironment } from './profiles.ts'
 import { macosSettings } from './macos.ts'
 import { serve } from '@hono/node-server'
 import { createApp } from './app.ts'
@@ -12,7 +13,7 @@ try { await store.initialize() } catch {
   await store.close()
   process.exit(1)
 }
-const server = serve({ fetch: createApp({ store }).fetch, hostname: host, port })
+const server = serve({ fetch: createApp({ store, publisher: publisherFromEnvironment(process.env) }).fetch, hostname: host, port })
 for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {
   server.close(() => { void store.close() })
 })

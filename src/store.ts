@@ -1,3 +1,4 @@
+import type { Publication, Profiles } from './profiles.ts'
 import { macosClientProfile, type MacosSettings } from './macos.ts'
 import { createHash } from 'node:crypto'
 import postgres from 'postgres'
@@ -75,6 +76,10 @@ export class PostgresStore {
         ALTER COLUMN key_path DROP NOT NULL,
         ADD COLUMN IF NOT EXISTS acme_email text NOT NULL DEFAULT ''`
       await sql`INSERT INTO machine_versions(machine_id,version,spec,policy) SELECT id,version, jsonb_build_object('server',server,'tlsServerName',tls_server_name,'realityServerName',reality_server_name,'acmeEmail',acme_email),policy FROM machines ON CONFLICT DO NOTHING`
+      await sql`CREATE TABLE IF NOT EXISTS published_client_profiles (
+        id text PRIMARY KEY, revision text NOT NULL, run_number bigint NOT NULL,
+        run_attempt integer NOT NULL, files jsonb NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now())`
       await sql`CREATE TABLE IF NOT EXISTS client_machines (
         id text PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
         platform text NOT NULL CHECK (platform = 'macos'),
@@ -85,6 +90,29 @@ export class PostgresStore {
 
   async ready(): Promise<void> { await this.sql`SELECT 1` }
   async close(): Promise<void> { await this.sql.end({ timeout: 5 }) }
+
+  async publishProfiles(id: string, publication: Publication): Promise<boolean> {
+    const { revision, run, attempt, files } = publication
+    const rows = await this.sql`
+      INSERT INTO published_client_profiles (id,revision,run_number,run_attempt,files)
+      VALUES (${id},${revision},${run},${attempt},${this.sql.json(files)})
+      ON CONFLICT (id) DO UPDATE SET revision=EXCLUDED.revision,
+        run_number=EXCLUDED.run_number, run_attempt=EXCLUDED.run_attempt,
+        files=EXCLUDED.files, updated_at=now()
+      WHERE (published_client_profiles.run_number,published_client_profiles.run_attempt)
+          < (EXCLUDED.run_number,EXCLUDED.run_attempt)
+        OR ((published_client_profiles.run_number,published_client_profiles.run_attempt)
+          = (EXCLUDED.run_number,EXCLUDED.run_attempt)
+          AND published_client_profiles.files=EXCLUDED.files
+          AND published_client_profiles.revision=EXCLUDED.revision)
+      RETURNING id`
+    return rows.length === 1
+  }
+
+  async getPublishedProfile(id: string, platform: keyof Profiles): Promise<Buffer | null> {
+    const [row] = await this.sql`SELECT files->>${platform} AS content FROM published_client_profiles WHERE id=${id}`
+    return row?.content === undefined || row.content === null ? null : Buffer.from(row.content)
+  }
 
   async saveClient(id: string): Promise<boolean> {
     if (!validSlug(id)) throw new Error('invalid id')
