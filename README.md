@@ -273,3 +273,30 @@ identity or its Agent token. Old client profiles stop authenticating once the
 Agent applies that version; download fresh profiles afterward. Configuration
 rollback retains the latest credentials and never revives a rotated key.
 Credential material is excluded from management responses and history.
+
+## Publish complete client profiles from Actions
+
+`PUT /v1/profiles/sing-box-deploy` accepts an object with `linux` and `macos`
+properties, each containing the complete configuration as JSON **text**. The service
+stores these strings verbatim in PostgreSQL and publishes both in one transaction;
+these files do not use the machine registry's templates or credentials.
+
+Set `PUBLISH_REPOSITORY=reonokiy/sing-box-deploy` and
+`PUBLISH_OWNER_ID=65524316`. Optionally pin `PUBLISH_REPOSITORY_ID` too.
+Without the first two variables, publishing returns 503. Uploads require a signed
+GitHub Actions OIDC bearer token with audience
+`https://api.nokiy.net/sing-box/v1/profiles`. The repository, immutable owner,
+`main` branch, `.github/workflows/deploy.yml` workflow, and push/manual event must
+match. The server fetches GitHub's JWKS over HTTPS. It derives the commit and run
+ordering from signed claims. Older runs cannot overwrite newer publications;
+retries with identical content are idempotent. Bodies are limited to 2 MiB.
+
+Download the exact uploaded JSON from:
+
+- `/v1/profiles/sing-box-deploy/linux`
+- `/v1/profiles/sing-box-deploy/macos`
+
+Downloads use ETags and `Cache-Control: no-store`, and rely on the existing
+Keygate/Tailnet authorization boundary. At the gateway, expose only the exact
+PUT upload path without Keygate; keep GET downloads protected. No permanent
+publishing secret is required. Existing machine and Agent interfaces remain available.

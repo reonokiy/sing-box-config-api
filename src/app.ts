@@ -1,3 +1,4 @@
+import { profileRoutes, type Publisher } from './profiles.ts'
 import { controlRoutes } from './control.ts'
 import { Hono } from 'hono'
 import { parsePolicy } from './policy.ts'
@@ -6,6 +7,7 @@ import { etag, validSlug, type PostgresStore, type Platform, type Role } from '.
 
 export type Settings = {
   store: PostgresStore
+  publisher?: Publisher
 }
 
 class PayloadTooLarge extends Error {}
@@ -57,6 +59,7 @@ export function createApp(settings: Settings): Hono {
   const app = baseApp()
   app.onError((_error, c) => c.text('Internal Server Error', 500))
   app.route('/',controlRoutes(settings.store))
+  app.route('/v1/profiles', profileRoutes(settings.store, settings.publisher))
   app.get('/readyz', async (c) => {
     try { await settings.store.ready(); return c.text('ok') }
     catch { return c.text('Database unavailable', 503) }
